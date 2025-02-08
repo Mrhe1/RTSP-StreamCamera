@@ -1,0 +1,24 @@
+buildscript {
+    //repositories {
+        //maven { url "https://maven.aliyun.com/nexus/content/repositories/releases" }
+        //google()
+        //mavenCentral()
+    //}
+    dependencies {
+        //classpath "com.android.tools.build:gradle:7.4.2" // Android Gradle Plugin
+        classpath 'com.android.tools.build:gradle:7.2.1' // 最新的 Android Gradle 插件版本
+        classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.6.10' // Kotlin 插件
+    }
+}
+
+plugins {
+    alias(libs.plugins.android.application) apply false
+}
+
+allprojects {
+    //repositories {
+        //maven { url "https://maven.aliyun.com/nexus/content/repositories/releases" }
+        //google()
+        //mavenCentral()
+    //}
+}
