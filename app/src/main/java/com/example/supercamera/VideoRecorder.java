@@ -20,10 +20,10 @@ public class VideoRecorder {
     private Disposable recordingDisposable;
 
     public void startRecording(String outputPath, int width, int height, int bitrate) {
-        try {
+        try {//bitrate单位kbps
             // 1. 初始化视频编码器（H.264）
             MediaFormat format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height);
-            format.setInteger(MediaFormat.KEY_BIT_RATE, bitrate);
+            format.setInteger(MediaFormat.KEY_BIT_RATE, bitrate * 1000);
             format.setInteger(MediaFormat.KEY_FRAME_RATE, 30);
             format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible);
             format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1);

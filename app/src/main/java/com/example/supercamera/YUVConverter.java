@@ -4,9 +4,10 @@ import com.example.supercamera.BuildConfig;
 import android.media.Image;
 import android.media.ImageFormat;
 import java.nio.ByteBuffer;
+import timber.log.Timber;
 
 public class YUVConverter {
-
+    private static final String TAG = "YUVConverter";
     /**
      * 将YUV420_888格式直接转换为YUV420P（紧凑排列，不考虑padding）
      * 注意：此方法假设图像数据已经是紧凑排列，无行跨度（row stride）填充
@@ -44,7 +45,8 @@ public class YUVConverter {
         System.arraycopy(uData, 0, yuv420p, yData.length, uData.length);
         System.arraycopy(vData, 0, yuv420p, yData.length + uData.length, vData.length);
 
-        Timber.i("YUV420P conversion completed. Size: %d", yuv420p.length);
+        Timber.tag(TAG).i("YUV420P conversion completed. Size: %d", yuv420p.length);
+        logImageInfo(image);//only debug use********&&&&&&&&
         return yuv420p;
     }
 
@@ -61,10 +63,10 @@ public class YUVConverter {
             ByteBuffer buffer = planes[i].getBuffer();
             int bufferSize = buffer.remaining();
 
-            Timber.i("Plane %d - pixelStride: %d", i, planes[i].getPixelStride());
-            Timber.i("Plane %d - rowStride: %d", i, planes[i].getRowStride());
-            Timber.i("Plane %d - buffer size: %d", i, bufferSize);
-            Timber.i("Finished reading data from plane %d", i);
+            Timber.tag(TAG).i("Plane %d - pixelStride: %d", i, planes[i].getPixelStride());
+            Timber.tag(TAG).i("Plane %d - rowStride: %d", i, planes[i].getRowStride());
+            Timber.tag(TAG).i("Plane %d - buffer size: %d", i, bufferSize);
+            Timber.tag(TAG).i("Finished reading data from plane %d", i);
         }
     }
 }

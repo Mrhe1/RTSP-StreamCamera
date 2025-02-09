@@ -57,7 +57,7 @@ public class VideoPusher {
         PUSH_STARTED,
         PUSH_STOPPED,
         RECONNECTION_ERROR,//重连错误
-        PACKETSLOST,
+        //PACKETSLOST,
         PUSHER_DESTROY,//推流引擎已销毁
         NETWORK_DELAY,//网络往返延时（ms）:RTT
         URLCHANGE,//url鉴权过期,会进行重连,message为新url
@@ -172,7 +172,7 @@ public class VideoPusher {
             @Override
             public void onPacketsLost(AlivcLivePusher pusher) {
                 Timber.tag(TAG).e("推流丢包");
-                reportSubject.onNext(new PushReport(EventType.PACKETSLOST, 0, "推流丢包", 0, 0, 0));
+                //reportSubject.onNext(new PushReport(EventType.PACKETSLOST, 0, "推流丢包", 0, 0, 0));
             }
             @Override
             public void onConnectFail(AlivcLivePusher pusher) {
@@ -267,7 +267,7 @@ public class VideoPusher {
                 reportSubject.onNext(new PushReport(
                         EventType.PUSH_STARTED,
                         0,
-                        "推流已启动",
+                        mPushUrlRef.get(),
                         pushConfig.getInitialVideoBitrate(),
                         pushConfig.getTargetVideoBitrate(),
                         pushConfig.getMinVideoBitrate()
@@ -470,7 +470,15 @@ public class VideoPusher {
                                             "重连异常: " + e.getMessage(),
                                             0, 0, 0
                                     ));
+                                    String oldurl = null;
+                                    oldurl =mPushUrlRef.get();
                                     mPushUrlRef.set(livePusher.getPushUrl());//获取正确的url
+                                    if(!oldurl.equals(mPushUrlRef.get()))
+                                    {
+                                        reportSubject.onNext(new PushReport(EventType.URLCHANGE, 0,
+                                                mPushUrlRef.get(),
+                                                0, 0, 0));
+                                    }
                                 }
                             },
                             throwable -> {
