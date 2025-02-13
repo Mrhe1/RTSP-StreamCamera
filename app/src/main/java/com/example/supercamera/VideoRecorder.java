@@ -19,7 +19,7 @@ public class VideoRecorder {
     private PublishSubject<byte[]> recordingQueue = PublishSubject.create();
     private Disposable recordingDisposable;
 
-    public void startRecording(String outputPath, int width, int height, int bitrate) {
+    public void startRecording(String outputPath, int width, int height, int bitrate) {//fps???
         try {//bitrate单位kbps
             // 1. 初始化视频编码器（H.264）
             MediaFormat format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height);
@@ -81,7 +81,7 @@ public class VideoRecorder {
         recordingQueue.onNext(yuvData); // 改为推入队列
     }
 
-    public void stopRecording() {
+    public void stopRecording() {//try
         if (isRecording) {
             // 清理队列
             if (recordingDisposable != null && !recordingDisposable.isDisposed()) {

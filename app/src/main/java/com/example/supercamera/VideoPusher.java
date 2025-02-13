@@ -111,7 +111,12 @@ public class VideoPusher {
         else
         {
             Timber.tag(TAG).e("推流分辨率错误");
-            stopPush();///////////////////////////////////////////////////////
+            stopPush();
+            reportSubject.onNext(new PushReport(
+                    EventType.ERROR, 0,
+                    "推流分辨率错误 " ,
+                    0, 0, 0
+            ));
             throw new RuntimeException("推流分辨率错误");
         }
 

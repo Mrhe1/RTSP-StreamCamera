@@ -1,42 +1,138 @@
 package com.example.supercamera;
 
 import android.content.Context;
+import android.content.pm.PackageManager;
+import android.graphics.ImageFormat;
+import android.hardware.camera2.CameraCharacteristics;
+import android.hardware.camera2.CaptureRequest;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.Size;
+import java.util.Arrays;
+import androidx.annotation.NonNull;
+import androidx.annotation.OptIn;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.camera.camera2.interop.Camera2CameraInfo;
+import androidx.camera.camera2.interop.ExperimentalCamera2Interop;
+import androidx.camera.core.Camera;
+import androidx.camera.core.CameraInfo;
 import androidx.camera.core.CameraSelector;
 import androidx.camera.core.ImageAnalysis;
 import androidx.camera.core.Preview;
 import androidx.camera.lifecycle.ProcessCameraProvider;
 import androidx.camera.view.PreviewView;
+import androidx.camera.camera2.interop.Camera2Interop;
+import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 import com.google.common.util.concurrent.ListenableFuture;
 import io.reactivex.rxjava3.android.schedulers.AndroidSchedulers;
+import java.util.HashSet;
+import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ExecutionException;
+import io.reactivex.rxjava3.disposables.CompositeDisposable;
+import io.reactivex.rxjava3.disposables.Disposable;
 import timber.log.Timber;
-import android.media.Image;
-import java.util.concurrent.TimeUnit;
 import android.view.View;
+import java.io.File;
+import java.text.SimpleDateFormat;
+import java.util.Locale;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.Date;
+import android.Manifest;
+import android.widget.Button;
+import android.util.Range;
+
 
 @androidx.camera.core.ExperimentalGetImage
 public class MainActivity extends AppCompatActivity {
+    public enum WorkflowState {
+        IDLE,             // 初始状态
+        READY,              // 准备就绪
+        STARTING,       // 初始化中
+        WORKING,          // 工作中
+        STOPPING,       // 关闭中
+        ERROR          //出错
+    }
+
+    private final AtomicReference<WorkflowState> currentState =
+            new AtomicReference<>(WorkflowState.IDLE);
+
     private VideoPusher videoPusher;
     private VideoRecorder videoRecorder;
     private PreviewView previewView;
     private static final String TAG = "MaiActivity";
-    private final Object reconnectLock = new Object(); // 同步锁对象
-    private volatile boolean isworking = false;
+    private static final String TAGCamera = "StartCamera";
+    private static final String TAGWorkflowState = "WorkflowState";
+    private final Object startStopLock = new Object();
+    private final Object checkPermissionLock = new Object();
+    private volatile boolean ispermitted = false;
     //摄像头控制相关变量
     private ProcessCameraProvider cameraProvider;
     private ImageAnalysis streamingAnalysis;
     private ImageAnalysis recordingAnalysis;
     private Preview preview;
+    private static final int CAMERA_PERMISSION_REQUEST_CODE = 100;
+    //按钮变量
+    private Button btnStart;
+    private Button btnStop;
+    private final CameraSelector cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA;
+    private CompositeDisposable compositeDisposable;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        compositeDisposable = new CompositeDisposable();
         setContentView(R.layout.activity_main);
 
+        setpermitted(checkCameraPermission());//权限检查
+        if (!ispermitted()) {
+            requestCameraPermission();
+        }
+
+        // 初始化按钮
+        btnStart = findViewById(R.id.btnStart);
+        btnStop = findViewById(R.id.btnStop);
+
+        // 设置按钮点击监听
+        btnStart.setOnClickListener(v -> handleStart());
+        btnStop.setOnClickListener(v -> handleStop());
+
+        // 初始化按钮状态
+        updateButtonState();
+
+        setState(WorkflowState.READY);
+    }
+
+    public boolean setState(WorkflowState newState) {
+        // 状态校验
+        if (!isValidTransition(newState)) {
+            Timber.tag(TAGWorkflowState).w("非法状态转换: %s → %s",
+                    currentState.get(), newState);
+            return false;
+        }
+        return currentState.compareAndSet(currentState.get(), newState);
+    }
+
+    private boolean isValidTransition(WorkflowState newState) {
+        // 实现状态转换规则校验
+        WorkflowState current = currentState.get();
+        switch (current) {
+            case IDLE: return newState == WorkflowState.STARTING;
+            case READY: return newState == WorkflowState.STARTING;
+            case STARTING: return newState == WorkflowState.WORKING || newState == WorkflowState.ERROR;
+            case WORKING: return newState == WorkflowState.STOPPING || newState == WorkflowState.ERROR;
+            case STOPPING: return newState == WorkflowState.READY;
+            case ERROR: return newState == WorkflowState.STOPPING;
+            default: return false;
+        }
+    }
+
+    private void handleStart()
+    {
         // 初始化推流参数
         int push_width = 1280;
         int push_height = 720;
@@ -48,138 +144,332 @@ public class MainActivity extends AppCompatActivity {
         int record_height = 2560;
         int record_bitrate = 10000;//单位kbps
         int record_fps =30;
-        String push_Url = "artc://example.com/live/stream"; // WebRTC 推流地址
-        String record_Path = getExternalFilesDir(null) + "/4k_record.mp4"; // 录制文件路径
-        //保证名字不重复！！！
-        //开始工作流
-        if(Start(this, push_Url, push_width, push_height,
-                push_fps, push_initAvgBitrate, push_initMaxBitrate,
-                push_initMinBitrate, record_Path, record_width,
-                record_height, record_bitrate, record_fps) != 0)
+        String push_Url = "artc://example.com/live/stream"; // WebRTC 推流地址，可为空？？？
+
+        if(currentState.get() != WorkflowState.READY)
         {
-            Timber.tag(TAG).e("工作流开始出错");
+            Timber.tag(TAG).e("无法重复开启工作流");return;
         }
-
-        try {
-            TimeUnit.SECONDS.sleep(300);
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e);
+        if(!ispermitted()) {
+            requestCameraPermission();
+            Timber.tag(TAG).e("权限被拒，工作流无法开始");return;
         }
+        if(Start(this, push_Url, push_width, push_height,
+                push_fps, push_initAvgBitrate, push_initMaxBitrate, push_initMinBitrate,
+                record_width, record_height, record_bitrate, record_fps) == 0)
+        {
+            Timber.tag(TAG).e("工作流开始成功");
+        }
+        else{
+            Timber.tag(TAG).e("工作流开始失败");
+        }
+        updateButtonState();
+    }
 
-        Stop();//停止
+    private void handleStop()
+    {
+        if(currentState.get() != WorkflowState.WORKING)
+        {
+            Timber.tag(TAG).e("工作流未开始，无法关闭");return;
+        }
+        if(!Stop())
+        {
+            Timber.tag(TAG).e("工作流关闭失败");return;
+        }
+        updateButtonState();
     }
 
     private int Start(Context context, String push_Url,int push_width, int push_height,
                           int push_fps, int push_initAvgBitrate, int push_initMaxBitrate,
-                          int push_initMinBitrate, String record_Path, int record_width,
+                          int push_initMinBitrate, int record_width,
                           int record_height, int record_bitrate, int record_fps)
-    {//return 0:成功，1：正在推流，2：码率等设置不合规，3：启动出错//fps未用！！！！！！！！
-        if(isworking())
-        {
-            Timber.tag(TAG).e("开始失败，正在推流");
-            return 1;
+    {//return 0:成功，1：正在推流，2：码率等设置不合规，3：推流出错，4：recordpath生成出错 ，5：其他错误
+        synchronized (startStopLock) {
+            if (currentState.get() != WorkflowState.READY) {
+                Timber.tag(TAG).e("开始失败，工作流已启动");
+                return 1;
+            }
+            setState(WorkflowState.STARTING);
+
+            //验证push码率设置是否正确
+            if (push_initMaxBitrate < push_initAvgBitrate || push_initMinBitrate > push_initAvgBitrate) {
+                Timber.tag(TAG).e("码率设置不合规");
+                setState(WorkflowState.READY);
+                return 2;
+            }
+            //生成recordpath
+            String record_Path = generateUniqueFileName(context);
+            if (record_Path == null) {
+                Timber.tag(TAG).e("无法生成录制路径");
+                setState(WorkflowState.READY);
+                return 4;
+            }
+
+            Timber.tag(TAG).e("正在开启工作流");
+            try {
+                // 2. 初始化推流服务
+                try {
+                    videoPusher = new VideoPusher(context, push_width, push_height, push_fps, push_initAvgBitrate, push_initMaxBitrate, push_initMinBitrate);
+                } catch (RuntimeException e) {
+                    Timber.tag(TAG).e("推流服务出错：%s", e.getMessage());
+                    setState(WorkflowState.ERROR);
+                    //Stop();//通过事件总线统一处理
+                    return 3;
+                }
+                // 3. 初始化录制服务
+                videoRecorder = new VideoRecorder();
+                videoRecorder.startRecording(record_Path, record_width, record_height, record_bitrate);
+                // 4. 初始化摄像头预览
+                previewView = findViewById(R.id.previewView);
+                // 5. 启动摄像头
+                startCamera(push_width, push_height, record_width, record_height, push_fps, record_fps);
+                // 6. 开始推流
+                videoPusher.startPush(push_Url);
+                // 7. 设置事件处理器
+                setupEventHandlers();
+                setState(WorkflowState.WORKING);
+                return 0;
+            } catch (Exception e) {
+                setState(WorkflowState.ERROR);
+                Timber.tag(TAG).e("启动异常: %s", e.getMessage());
+                // 释放锁后再执行停止操作
+                new Handler(Looper.getMainLooper()).post(() -> Stop());
+                return 5;
+            }
         }
-        //1.验证push码率设置是否正确
-        if(push_initMaxBitrate < push_initAvgBitrate || push_initMinBitrate > push_initAvgBitrate)
-        {
-            Timber.tag(TAG).e("码率设置不合规");
-            return 2;
-        }
-        // 2. 初始化推流服务
-        try {
-            videoPusher = new VideoPusher(context, push_width, push_height, push_fps, push_initAvgBitrate, push_initMaxBitrate, push_initMinBitrate);
-        } catch (RuntimeException e) {
-            Timber.tag(TAG).e("推流服务出错：%s",e.getMessage());
-            Stop();//停止整个工作流。ps：handle部分只负责消息发送等外围操作，不影响主要程序执行
-            return 3;
-        }
-        // 3. 初始化录制服务
-        videoRecorder = new VideoRecorder();
-        videoRecorder.startRecording(record_Path, record_width, record_height, record_bitrate);
-        // 4. 初始化摄像头预览
-        previewView = findViewById(R.id.previewView);
-        // 5. 启动摄像头
-        startCamera(push_width, push_height, record_width, record_height);
-        // 6. 开始推流
-        videoPusher.startPush(push_Url);
-        // 7. 设置事件处理器
-        setupEventHandlers();
-        setworking(true);
-        return 0;
     }
 
-    private boolean Stop()
-    {
-        // 停止顺序很重要!!!
+    private boolean Stop() {
+        synchronized (startStopLock) {
+            if (currentState.get() != WorkflowState.WORKING && currentState.get() != WorkflowState.ERROR) {
+                Timber.tag(TAG).i("无需重复停止");
+                return true;
+            }
+            setState(WorkflowState.STOPPING);
+            try {
+                // 1. 停止推流
+                if (videoPusher != null) {
+                    videoPusher.stopPush();
+                    videoPusher = null;
+                }
+                // 2. 停止摄像头
+                if (cameraProvider != null) {
+                    stopCamera();
+                }
+                // 3. 停止录制
+                if (videoRecorder != null) {
+                    videoRecorder.stopRecording();
+                }
+
+                setState(WorkflowState.READY);
+                return true;
+            } catch (Exception e) {
+                Timber.tag(TAG).e(e, "停止操作异常");
+                setState(WorkflowState.READY);//忽略停止错误
+                return false;
+            }
+        }
+    }
+
+    private void updateButtonState() {//更新按钮状态
+        boolean isWorking = currentState.get() == WorkflowState.WORKING;
+        btnStart.setEnabled(!isWorking);
+        btnStop.setEnabled(isWorking);
+    }
+
+    //获取fps的range
+    private Range<Integer> getFpsRange(int fps) {
         try {
-            // 1. 先停止推流
-            videoPusher.stopPush();
-            // 2. 停止摄像头采集
-            stopCamera();
-            // 3. 最后停止录制
-            videoRecorder.stopRecording();
-            setworking(false);
-            return true;
+            // 获取设备支持的帧率范围
+            CameraInfo cameraInfo = cameraProvider.getAvailableCameraInfos().get(0);
+            Set<Range<Integer>> supportedRanges = cameraInfo.getSupportedFrameRateRanges();
+
+            // 策略 1：优先匹配精确帧率
+            for (Range<Integer> range : supportedRanges) {
+                if (range.getLower() == fps && range.getUpper() == fps) {
+                    return range;
+                }
+            }
+
+            // 策略 2：匹配包含目标帧率的范围
+            for (Range<Integer> range : supportedRanges) {
+                if (range.contains(fps)) {
+                    return new Range<>(fps, fps); // 限定为固定值
+                }
+            }
+
+            // 策略 3：降级到最低可用帧率
+            int minFps = Integer.MAX_VALUE;
+            for (Range<Integer> range : supportedRanges) {
+                minFps = Math.min(minFps, range.getLower());
+            }
+            Timber.tag(TAGCamera).w("设备不支持 %dfps，降级到 %dfps", fps, minFps);
+            return new Range<>(minFps, minFps);
         }
         catch (Exception e) {
-            Timber.tag(TAG).e(e, "停止操作异常,程序退出");
-            finishAffinity();//退出程序
-            return false;
+            Timber.tag(TAGCamera).e(e, "帧率配置失败");
+            return new Range<>(30, 30); // 最终保底值
         }
     }
 
-    private void startCamera(int push_width, int push_height, int record_width, int record_height) {
+    @OptIn(markerClass = ExperimentalCamera2Interop.class)
+    private boolean checkStreamCombinationSupport(int push_width, int push_height,
+                                                  int record_width, int record_height) {
+        if (cameraProvider == null) {
+            Timber.tag(TAGCamera).e("CameraProvider 未初始化");
+            return false;
+        }
+
+        // 通过 CameraX 直接获取 Camera2 特性
+        Camera camera = cameraProvider.bindToLifecycle(this, cameraSelector);
+        Camera2CameraInfo camera2Info = Camera2CameraInfo.from(camera.getCameraInfo());
+
+        // 获取 YUV_420_888 格式的所有支持分辨率
+        Size[] supportedSizes = Objects.requireNonNull(camera2Info.getCameraCharacteristic(
+                CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP
+        )).getOutputSizes(ImageFormat.YUV_420_888);
+
+        // 要检查的目标分辨率数组
+        Size[] targetSizes = {
+                new Size(push_width, push_height),  // 预览
+                new Size(record_width, record_height)  // 录制
+        };
+
+        // 将支持的尺寸转换为HashSet加速查找
+        Set<Size> sizeSet = new HashSet<>(Arrays.asList(supportedSizes));
+
+        // 检查所有目标尺寸是否存在于支持列表中
+        for (Size targetSize : targetSizes) {
+            if (!sizeSet.contains(targetSize)) {
+                Timber.tag(TAGCamera).e("分辨率 %dx%d 不支持", targetSize.getWidth(), targetSize.getHeight());
+                return false;
+            }
+        }
+        return true;
+    }
+
+    //检查硬件防抖支持
+    @OptIn(markerClass = ExperimentalCamera2Interop.class)
+    private boolean isHardwareStabilizationSupported() {
+        try {
+            Camera camera = cameraProvider.bindToLifecycle(this, cameraSelector);
+            Camera2CameraInfo camera2Info = Camera2CameraInfo.from(camera.getCameraInfo());
+            int[] modes = camera2Info.getCameraCharacteristic(
+                    CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES
+            );
+
+            for (int mode : modes) {
+                if (mode == CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON) {
+                    return true;
+                }
+            }
+        } catch (Exception e) {
+            Timber.e("检查硬件防抖支持失败: %s", e.getMessage());
+        }
+        return false;
+    }
+
+
+    @OptIn(markerClass = ExperimentalCamera2Interop.class)
+    private void startCamera(int push_width, int push_height, int record_width,
+                             int record_height, int push_fps, int record_fps) {
         ListenableFuture<ProcessCameraProvider> cameraProviderFuture = ProcessCameraProvider.getInstance(this);
         cameraProviderFuture.addListener(() -> {
             try {
-                // 保存cameraProvider引用到成员变量
                 cameraProvider = cameraProviderFuture.get();
 
-                // 1. 配置预览（低分辨率）
-                Preview preview = new Preview.Builder()
-                        .setTargetResolution(new Size(push_width, push_height)) // 720P
-                        .build();
+                //获取fps——range
+                Range<Integer> push_fps_Range = getFpsRange(push_fps);
+                Range<Integer> record_fps_Range = getFpsRange(record_fps);//不支持返回最低帧率
+                //检查摄像头是否支持流组合
+                if (!checkStreamCombinationSupport(push_width, push_height, record_width, record_height)) {
+                    Timber.tag(TAGCamera).e("相机不支持流组合");
+                    throw new RuntimeException("相机不支持流组合");
+                }
+                // ========== 预览配置 ==========
+                Preview.Builder previewBuilder = new Preview.Builder()
+                        .setTargetResolution(new Size(push_width, push_height));
+                //用camera2配置扩展
+                new Camera2Interop.Extender<>(previewBuilder)
+                        .setCaptureRequestOption(
+                                CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,
+                                push_fps_Range
+                        );
+
+                preview = previewBuilder.build();
                 preview.setSurfaceProvider(previewView.getSurfaceProvider());
 
-                // 2. 配置推流分析器（低分辨率）
-                ImageAnalysis streamingAnalysis = new ImageAnalysis.Builder()
-                        .setTargetResolution(new Size(push_width, push_height)) // 720P
-                        .build();
-                streamingAnalysis.setAnalyzer(ContextCompat.getMainExecutor(this), image -> {
-                    @SuppressWarnings("UnsafeExperimentalUsageError")
-                    Image lowResImage = image.getImage();
-                    try {
-                        byte[] yuvData = YUVConverter.convertYUV420888ToYUV420P(lowResImage);
-                        videoPusher.getStreamingQueue().onNext(yuvData);
-                    } catch (IllegalArgumentException e) {
-                        Timber.e(e, "Image format error");
-                    } finally {
-                        image.close(); // 确保关闭 Image
-                    }
-                });
+                // ========== 推流分析器配置 ==========
+                ImageAnalysis.Builder streamingBuilder = new ImageAnalysis.Builder()
+                        .setTargetResolution(new Size(push_width, push_height))
+                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST);
 
-                // 3. 配置录制分析器（高分辨率）
-                ImageAnalysis recordingAnalysis = new ImageAnalysis.Builder()
+                new Camera2Interop.Extender<>(streamingBuilder)
+                        .setCaptureRequestOption(
+                                CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,
+                                push_fps_Range
+                        )
+                        .setCaptureRequestOption(
+                                CaptureRequest.SENSOR_FRAME_DURATION,
+                                (long)(1_000_000_000 / ((Integer) push_fps_Range.getUpper()))
+                        )
+                        .setCaptureRequestOption(
+                                CaptureRequest.CONTROL_MODE,
+                                CaptureRequest.CONTROL_MODE_AUTO
+                        )
+                        .setCaptureRequestOption(//防抖
+                                CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
+                                CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_PREVIEW_STABILIZATION
+                        )
+                        .setCaptureRequestOption(
+                                CaptureRequest.EDGE_MODE,
+                                CaptureRequest.EDGE_MODE_FAST
+                        );
+
+                streamingAnalysis = streamingBuilder.build();
+
+                // ========== 录制分析器配置 ==========
+                ImageAnalysis.Builder recordingBuilder = new ImageAnalysis.Builder()
                         .setTargetResolution(new Size(record_width, record_height))
-                        .build();
-                recordingAnalysis.setAnalyzer(ContextCompat.getMainExecutor(this), image -> {
-                    @SuppressWarnings("UnsafeExperimentalUsageError")
-                    Image highResImage = image.getImage();
-                    try {
-                        byte[] yuvData = YUVConverter.convertYUV420888ToYUV420P(highResImage);
-                        videoRecorder.getRecordingQueue().onNext(yuvData); // 改为队列方式
-                    } catch (IllegalArgumentException e) {
-                        Timber.e(e, "Image format error"); // 修改为Timber
-                    } finally {
-                        image.close(); // 确保关闭 Image
-                    }
-                });
+                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST);
 
-                // 4. 绑定摄像头
+                new Camera2Interop.Extender<>(recordingBuilder)
+                        .setCaptureRequestOption(
+                                CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,
+                                record_fps_Range
+                        )
+                        .setCaptureRequestOption(
+                                CaptureRequest.SENSOR_FRAME_DURATION,
+                                (long)(1_000_000_000 / ((Integer) record_fps_Range.getUpper()))
+                        )
+                        .setCaptureRequestOption(//防抖
+                                CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
+                                CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON
+                        )
+                        .setCaptureRequestOption(
+                                CaptureRequest.NOISE_REDUCTION_MODE,
+                                CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY
+                        );
+
+                recordingAnalysis = recordingBuilder.build();
+
+                // ========== 绑定用例 ==========
                 CameraSelector cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA;
-                cameraProvider.bindToLifecycle(this, cameraSelector, preview, streamingAnalysis, recordingAnalysis);
+                cameraProvider.bindToLifecycle(
+                        this,
+                        cameraSelector,
+                        preview,
+                        streamingAnalysis,
+                        recordingAnalysis
+                );
+
             } catch (ExecutionException | InterruptedException e) {
-                Timber.e(e, "Camera initialization failed");
+                if (cameraProvider != null) {
+                    cameraProvider.unbindAll();
+                    cameraProvider = null;
+                }
+                Timber.e(e, "摄像头初始化失败");
+                throw new RuntimeException("摄像头初始化失败",e);
             }
         }, ContextCompat.getMainExecutor(this));
     }
@@ -193,9 +483,11 @@ public class MainActivity extends AppCompatActivity {
                 // 2. 关闭分析器
                 if (streamingAnalysis != null) {
                     streamingAnalysis.clearAnalyzer();
+                    streamingAnalysis = null;
                 }
                 if (recordingAnalysis != null) {
                     recordingAnalysis.clearAnalyzer();
+                    recordingAnalysis = null;
                 }
 
                 // 3. 释放预览资源
@@ -210,11 +502,49 @@ public class MainActivity extends AppCompatActivity {
             } catch (Exception e) {
                 Timber.tag(TAG).e(e, "停止摄像头失败");
             }
+            cameraProvider = null;
         }
     }
 
+    private boolean checkCameraPermission() {
+        return ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.CAMERA
+        ) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private void requestCameraPermission() {
+        ActivityCompat.requestPermissions(
+                this,
+                new String[]{Manifest.permission.CAMERA},
+                CAMERA_PERMISSION_REQUEST_CODE
+        );
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode,
+                                           @NonNull String[] permissions,
+                                           @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+
+        //判断请求码是否匹配
+        if (requestCode == CAMERA_PERMISSION_REQUEST_CODE) {
+
+            //检查结果数组是否非空
+            if (grantResults.length > 0) {
+                if (grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                    setpermitted(true);// 权限通过
+                    Timber.tag(TAG).i("camera权限通过");
+                } else {
+                    Timber.tag(TAG).i("camera权限被拒");// 权限被拒
+                }
+            }
+        }
+    }
+
+
     private void setupEventHandlers() {
-        videoPusher.getReportSubject()
+        Disposable disposable = videoPusher.getReportSubject()
                 .observeOn(AndroidSchedulers.mainThread())
                 .subscribe(report -> {
                     switch (report.type) {
@@ -253,6 +583,7 @@ public class MainActivity extends AppCompatActivity {
                             break;
                     }
                 });
+        compositeDisposable.add(disposable);
     }
 
     private void handlePushStart(VideoPusher.PushReport report) {
@@ -288,6 +619,8 @@ public class MainActivity extends AppCompatActivity {
         String errormsg = report.message;
         int errorcode = report.code;
         Timber.tag(TAG).e("推流出错,代码：%d,消息：%s",errorcode,errormsg);
+        setState(WorkflowState.ERROR);
+        Stop();
     }
 
     private void handleReconnectError(VideoPusher.PushReport report) {
@@ -303,30 +636,69 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void handleUrlChange(VideoPusher.PushReport report) {
-        Timber.tag(TAG).e("推流url：%s",report.message);
+        Timber.tag(TAG).e("推流改变，url：%s",report.message);
     }
 
     private void handleReconnectionSuccess(VideoPusher.PushReport report) {
         Timber.tag(TAG).e("重连成功");
     }
 
-    public boolean isworking() {
-        synchronized (reconnectLock) {
-            return isworking;
+    public boolean ispermitted() {
+        synchronized (checkPermissionLock) {
+            return ispermitted;
         }
     }
-    private void setworking(boolean reconnecting) {
-        synchronized (reconnectLock) {
-            isworking = reconnecting;
+    private void setpermitted(boolean permitted) {
+        synchronized (checkPermissionLock) {
+            ispermitted = permitted;
         }
     }
+
+    public static String generateUniqueFileName(Context context) {
+        //创建专属存储目录
+        File recordsDir = new File(context.getExternalFilesDir(null), "SuperRecords");
+        if (!recordsDir.exists() && !recordsDir.mkdirs()) {
+            Timber.e("创建目录失败");
+            return null;
+        }
+        //获取当前日期字符串
+        SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd", Locale.CHINA);
+        String dateStr = dateFormat.format(new Date());
+        //查找当天最大序号
+        int maxNumber = 0;
+        Pattern pattern = Pattern.compile("^supercamera_record-"+dateStr+"_#(\\d{3})\\.mp4$");
+        File[] files = recordsDir.listFiles();
+        if (files != null) {
+            for (File file : files) {
+                try {
+                    Matcher matcher = pattern.matcher(file.getName());
+                    if (matcher.find()) {
+                        int num = Integer.parseInt(matcher.group(1));
+                        maxNumber = Math.max(maxNumber, num);
+                    }
+                } catch (NumberFormatException e) {
+                    Timber.e(e, "Invalid file number format");
+                }
+            }
+        }
+        //生成新序号（两位数格式）
+        String newNumber = String.format(Locale.CHINA, "%02d", maxNumber + 1);
+        //组合完整路径
+        return new File(recordsDir,
+                "supercamera_record-" + dateStr + "_#" + newNumber + ".mp4"
+        ).getAbsolutePath();
+    }
+
 
     @Override
     protected void onDestroy() {
         try {
             Stop();
-        } finally {
-            super.onDestroy();
+        } catch (Exception e) {}
+        //释放RxJava资源
+        if (compositeDisposable != null && !compositeDisposable.isDisposed()) {
+            compositeDisposable.dispose();
         }
+        super.onDestroy();
     }
 }
