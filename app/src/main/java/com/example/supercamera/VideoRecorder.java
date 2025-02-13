@@ -2,24 +2,32 @@ package com.example.supercamera;
 
 import com.example.supercamera.BuildConfig;
 import android.media.MediaCodec;
+import android.media.MediaCodecInfo;
 import android.media.MediaFormat;
 import android.media.MediaMuxer;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import io.reactivex.rxjava3.core.BackpressureStrategy;
 import io.reactivex.rxjava3.core.Observable;
 import io.reactivex.rxjava3.disposables.Disposable;
 import io.reactivex.rxjava3.schedulers.Schedulers;
 import io.reactivex.rxjava3.subjects.PublishSubject;
+import timber.log.Timber;
 
 public class VideoRecorder {
     private MediaCodec videoEncoder;
     private MediaMuxer mediaMuxer;
     private int trackIndex;
-    private boolean isRecording = false;
+    //private boolean isRecording = false;
     private PublishSubject<byte[]> recordingQueue = PublishSubject.create();
     private Disposable recordingDisposable;
+    private static final String TAG = "VideoRecorder";
+    private final AtomicBoolean isRecording = new AtomicBoolean(false);
 
-    public void startRecording(String outputPath, int width, int height, int bitrate) {//fps???
+    public void startRecording(String outputPath, int width, int height, int fps, int bitrate) {//fps???
         try {//bitrate单位kbps
             // 1. 初始化视频编码器（H.264）
             MediaFormat format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height);
@@ -37,7 +45,7 @@ public class VideoRecorder {
             trackIndex = mediaMuxer.addTrack(videoEncoder.getOutputFormat());
             mediaMuxer.start();
 
-            isRecording = true;
+            isRecording.set(true);
 
             // 3. 启动录制队列
             startProcessingQueue();
@@ -47,13 +55,14 @@ public class VideoRecorder {
     }
 
     private void startProcessingQueue() {
-        recordingDisposable = recordingQueue
+        Disposable disposable = recordingQueue
+                .toFlowable(BackpressureStrategy.LATEST)
                 .onBackpressureDrop(frame ->
-                        Timber.w("丢弃录制帧，当前队列压力过大")
+                        Timber.tag(TAG).w("丢弃帧，当前队列压力过大")
                 )
                 .observeOn(Schedulers.io())
                 .subscribe(frame -> {
-                    if (!isRecording) return;
+                    if (!isRecording.get()) return;
 
                     ByteBuffer[] inputBuffers = videoEncoder.getInputBuffers();
                     int inputBufferIndex = videoEncoder.dequeueInputBuffer(10000);
@@ -82,18 +91,26 @@ public class VideoRecorder {
     }
 
     public void stopRecording() {//try
-        if (isRecording) {
+        if (isRecording.get()) {
             // 清理队列
             if (recordingDisposable != null && !recordingDisposable.isDisposed()) {
                 recordingDisposable.dispose();
             }
 
-            // 释放编码器和Muxer
-            videoEncoder.stop();
-            videoEncoder.release();
-            mediaMuxer.stop();
-            mediaMuxer.release();
-            isRecording = false;
+            try {
+                // 释放编码器和Muxer
+                if(videoEncoder != null) {
+                    videoEncoder.stop();
+                    videoEncoder.release();
+                }
+                if(mediaMuxer != null) {
+                    mediaMuxer.stop();
+                    mediaMuxer.release();
+                }
+                isRecording.set(false);
+            } catch (Exception e) {
+                Timber.tag(TAG).e("录制停止出错");
+            }
         }
     }
 

@@ -38,6 +38,7 @@ import android.view.View;
 import java.io.File;
 import java.text.SimpleDateFormat;
 import java.util.Locale;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -49,6 +50,21 @@ import android.util.Range;
 
 @androidx.camera.core.ExperimentalGetImage
 public class MainActivity extends AppCompatActivity {
+    // 新增防抖模式枚举
+    public enum StabilizationMode {
+        OFF,
+        OIS_ONLY,   // 仅光学防抖
+        EIS_ONLY,   // 仅电子防抖
+        HYBRID      // 混合模式（OIS+EIS）
+    }
+
+    private final AtomicReference<StabilizationMode> nowPushStabMode =
+            new AtomicReference<>(StabilizationMode.OFF);
+    private final AtomicReference<StabilizationMode> nowRecordStabMode =
+            new AtomicReference<>(StabilizationMode.OFF);
+    private final AtomicInteger Now_Push_fps = new AtomicInteger(-1);
+    private final AtomicInteger Now_Record_fps = new AtomicInteger(-1);
+
     public enum WorkflowState {
         IDLE,             // 初始状态
         READY,              // 准备就绪
@@ -140,6 +156,8 @@ public class MainActivity extends AppCompatActivity {
         int push_initAvgBitrate = 2500;//单位kbps
         int push_initMaxBitrate = 4000;
         int push_initMinBitrate = 1000;
+        StabilizationMode push_StabilizationMode = StabilizationMode.OIS_ONLY;//防抖
+        StabilizationMode record_StabilizationMode = StabilizationMode.HYBRID;
         int record_width = 3840;
         int record_height = 2560;
         int record_bitrate = 10000;//单位kbps
@@ -156,7 +174,8 @@ public class MainActivity extends AppCompatActivity {
         }
         if(Start(this, push_Url, push_width, push_height,
                 push_fps, push_initAvgBitrate, push_initMaxBitrate, push_initMinBitrate,
-                record_width, record_height, record_bitrate, record_fps) == 0)
+                record_width, record_height, record_bitrate, record_fps,
+                push_StabilizationMode, record_StabilizationMode) == 0)
         {
             Timber.tag(TAG).e("工作流开始成功");
         }
@@ -164,6 +183,31 @@ public class MainActivity extends AppCompatActivity {
             Timber.tag(TAG).e("工作流开始失败");
         }
         updateButtonState();
+
+        Timber.tag(TAG).i("最终防抖配置 => 推流模式:%s, 录制模式:%s",
+                getCurrentPushStabMode().name(),
+                getCurrentRecordStabMode().name());
+
+        if(getCurrentPushStabMode() != push_StabilizationMode)
+        {
+            Timber.tag(TAG).w("推流防抖设置不支持 => 设置:%s, 实际:%s",
+                    push_StabilizationMode.name(),
+                    getCurrentPushStabMode().name());
+        }
+        if(getCurrentRecordStabMode() != record_StabilizationMode)
+        {
+            Timber.tag(TAG).w("录制防抖设置不支持 => 设置:%s, 实际:%s",
+                    record_StabilizationMode.name(),
+                    getCurrentRecordStabMode().name());
+        }
+        if(Now_Push_fps.get() != push_fps && Now_Push_fps.get() != -1)
+        {
+            Timber.tag(TAG).w("推流帧率设置不支持 => 设置:%d, 实际:%d", push_fps, Now_Push_fps.get());
+        }
+        if(Now_Record_fps.get() != record_fps && Now_Record_fps.get() != -1)
+        {
+            Timber.tag(TAG).w("录制帧率设置不支持 => 设置:%d, 实际:%d", record_fps, Now_Record_fps.get());
+        }
     }
 
     private void handleStop()
@@ -182,7 +226,9 @@ public class MainActivity extends AppCompatActivity {
     private int Start(Context context, String push_Url,int push_width, int push_height,
                           int push_fps, int push_initAvgBitrate, int push_initMaxBitrate,
                           int push_initMinBitrate, int record_width,
-                          int record_height, int record_bitrate, int record_fps)
+                          int record_height, int record_bitrate, int record_fps,
+                      StabilizationMode push_StabilizationMode,
+                      StabilizationMode record_StabilizationMode)
     {//return 0:成功，1：正在推流，2：码率等设置不合规，3：推流出错，4：recordpath生成出错 ，5：其他错误
         synchronized (startStopLock) {
             if (currentState.get() != WorkflowState.READY) {
@@ -218,11 +264,12 @@ public class MainActivity extends AppCompatActivity {
                 }
                 // 3. 初始化录制服务
                 videoRecorder = new VideoRecorder();
-                videoRecorder.startRecording(record_Path, record_width, record_height, record_bitrate);
+                videoRecorder.startRecording(record_Path, record_width, record_height, record_fps, record_bitrate);
                 // 4. 初始化摄像头预览
                 previewView = findViewById(R.id.previewView);
                 // 5. 启动摄像头
-                startCamera(push_width, push_height, record_width, record_height, push_fps, record_fps);
+                startCamera(push_width, push_height, record_width, record_height, push_fps, record_fps,
+                        push_StabilizationMode, record_StabilizationMode);
                 // 6. 开始推流
                 videoPusher.startPush(push_Url);
                 // 7. 设置事件处理器
@@ -276,7 +323,8 @@ public class MainActivity extends AppCompatActivity {
         btnStart.setEnabled(!isWorking);
         btnStop.setEnabled(isWorking);
     }
-
+/////////////////////////////////////////////////////////////////////////////////////////////
+                                  //CAMERA部分//***&&
     //获取fps的range
     private Range<Integer> getFpsRange(int fps) {
         try {
@@ -298,12 +346,11 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
 
-            // 策略 3：降级到最低可用帧率
+            //降级到最低可用帧率
             int minFps = Integer.MAX_VALUE;
             for (Range<Integer> range : supportedRanges) {
                 minFps = Math.min(minFps, range.getLower());
             }
-            Timber.tag(TAGCamera).w("设备不支持 %dfps，降级到 %dfps", fps, minFps);
             return new Range<>(minFps, minFps);
         }
         catch (Exception e) {
@@ -312,8 +359,9 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    //检查分辨率
     @OptIn(markerClass = ExperimentalCamera2Interop.class)
-    private boolean checkStreamCombinationSupport(int push_width, int push_height,
+    private boolean checkResolutionSupport(int push_width, int push_height,
                                                   int record_width, int record_height) {
         if (cameraProvider == null) {
             Timber.tag(TAGCamera).e("CameraProvider 未初始化");
@@ -350,7 +398,9 @@ public class MainActivity extends AppCompatActivity {
 
     //检查硬件防抖支持
     @OptIn(markerClass = ExperimentalCamera2Interop.class)
-    private boolean isHardwareStabilizationSupported() {
+    private boolean[] checkStabilizationSupport() {
+        //预览防抖,1:光学防抖 (OIS),2:电子防抖 (EIS)
+        boolean[] isStabilizationSupport = {false,false,false};
         try {
             Camera camera = cameraProvider.bindToLifecycle(this, cameraSelector);
             Camera2CameraInfo camera2Info = Camera2CameraInfo.from(camera.getCameraInfo());
@@ -359,33 +409,139 @@ public class MainActivity extends AppCompatActivity {
             );
 
             for (int mode : modes) {
-                if (mode == CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON) {
-                    return true;
+                if (mode == CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_PREVIEW_STABILIZATION ) {
+                    isStabilizationSupport[0] = true;
+                }
+                if (mode == CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON) {//EIS
+                    isStabilizationSupport[2] = true;
+                }
+            }
+
+            int[] OISModes = camera2Info.getCameraCharacteristic(
+                    CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION);
+
+            for (int mode : OISModes) {
+                if (mode == CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON) {//OIS
+                    isStabilizationSupport[1] = true;
                 }
             }
         } catch (Exception e) {
             Timber.e("检查硬件防抖支持失败: %s", e.getMessage());
         }
-        return false;
+        return isStabilizationSupport;
+    }
+
+    //设置防抖
+    // 修改configureStabilization方法签名，添加isPush参数区分推流/录制
+    @ExperimentalCamera2Interop
+    private void configureStabilization(ImageAnalysis.Builder builder,
+                                        StabilizationMode requestedMode,
+                                        boolean isPush) {
+        boolean[] supportModes = checkStabilizationSupport();
+        StabilizationMode finalMode = requestedMode;
+
+        switch (requestedMode) {
+            case OIS_ONLY:
+                if (supportModes[1]) {
+                    enableOIS(builder);
+                } else if (supportModes[2]) {
+                    enableEIS(builder);
+                    finalMode = StabilizationMode.EIS_ONLY;
+                    Timber.tag(TAGCamera).w("OIS不可用，自动降级到EIS");
+                }else {
+                    finalMode = StabilizationMode.OFF;
+                    Timber.tag(TAGCamera).w("OIS和EIS均不可用，自动降级到OFF");
+                }
+                break;
+            case EIS_ONLY:
+                if (supportModes[2]) {
+                    enableEIS(builder);
+                } else if (supportModes[1]) {
+                    enableOIS(builder);
+                    finalMode = StabilizationMode.OIS_ONLY;
+                    Timber.tag(TAGCamera).w("EIS不可用，自动降级到OIS");
+                }else {
+                    finalMode = StabilizationMode.OFF;
+                    Timber.tag(TAGCamera).w("OIS和EIS均不可用，自动降级到OFF");
+                }
+                break;
+            case HYBRID:
+                if (supportModes[1] && supportModes[2]) {
+                    enableHybrid(builder);
+                } else {
+                    finalMode = supportModes[1] ? StabilizationMode.OIS_ONLY :
+                            supportModes[2] ? StabilizationMode.EIS_ONLY : StabilizationMode.OFF;
+                    Timber.tag(TAGCamera).w("混合模式不可用，降级到%s", finalMode.name());
+                }
+                break;
+        }
+
+        // 根据isPush参数更新对应状态变量
+        if (isPush) {
+            nowPushStabMode.set(finalMode);
+        } else {
+            nowRecordStabMode.set(finalMode);
+        }
+    }
+
+
+    @ExperimentalCamera2Interop
+    private void enableEIS(ImageAnalysis.Builder builder) {
+        new Camera2Interop.Extender<>(builder)
+                .setCaptureRequestOption(
+                        CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
+                        CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON
+                );
+    }
+
+    @ExperimentalCamera2Interop
+    private void enableOIS(ImageAnalysis.Builder builder) {
+        new Camera2Interop.Extender<>(builder)
+                .setCaptureRequestOption(
+                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
+                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON
+                );
+    }
+
+    @ExperimentalCamera2Interop
+    private void enableHybrid(ImageAnalysis.Builder builder) {
+        new Camera2Interop.Extender<>(builder)
+                .setCaptureRequestOption(
+                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
+                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON
+                )
+                .setCaptureRequestOption(
+                        CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
+                        CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON
+                );
     }
 
 
     @OptIn(markerClass = ExperimentalCamera2Interop.class)
     private void startCamera(int push_width, int push_height, int record_width,
-                             int record_height, int push_fps, int record_fps) {
+                             int record_height, int push_fps, int record_fps,
+                             StabilizationMode push_StabilizationMode,
+                             StabilizationMode record_StabilizationMode) {
+        if (cameraProvider != null) {//解除之前的绑定
+            cameraProvider.unbind(preview, streamingAnalysis, recordingAnalysis);
+        }
+
         ListenableFuture<ProcessCameraProvider> cameraProviderFuture = ProcessCameraProvider.getInstance(this);
         cameraProviderFuture.addListener(() -> {
             try {
                 cameraProvider = cameraProviderFuture.get();
 
+                //检查摄像头是否支持流组合
+                if (!checkResolutionSupport(push_width, push_height, record_width, record_height)) {
+                    Timber.tag(TAGCamera).e("相机不支持分辨率");
+                    setState(WorkflowState.ERROR);
+                    throw new RuntimeException("相机不支持分辨率");
+                }
+
                 //获取fps——range
                 Range<Integer> push_fps_Range = getFpsRange(push_fps);
                 Range<Integer> record_fps_Range = getFpsRange(record_fps);//不支持返回最低帧率
-                //检查摄像头是否支持流组合
-                if (!checkStreamCombinationSupport(push_width, push_height, record_width, record_height)) {
-                    Timber.tag(TAGCamera).e("相机不支持流组合");
-                    throw new RuntimeException("相机不支持流组合");
-                }
+
                 // ========== 预览配置 ==========
                 Preview.Builder previewBuilder = new Preview.Builder()
                         .setTargetResolution(new Size(push_width, push_height));
@@ -402,8 +558,10 @@ public class MainActivity extends AppCompatActivity {
                 // ========== 推流分析器配置 ==========
                 ImageAnalysis.Builder streamingBuilder = new ImageAnalysis.Builder()
                         .setTargetResolution(new Size(push_width, push_height))
-                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST);
+                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                        .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888);
 
+                configureStabilization(streamingBuilder, push_StabilizationMode, true);//防抖
                 new Camera2Interop.Extender<>(streamingBuilder)
                         .setCaptureRequestOption(
                                 CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,
@@ -417,10 +575,6 @@ public class MainActivity extends AppCompatActivity {
                                 CaptureRequest.CONTROL_MODE,
                                 CaptureRequest.CONTROL_MODE_AUTO
                         )
-                        .setCaptureRequestOption(//防抖
-                                CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
-                                CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_PREVIEW_STABILIZATION
-                        )
                         .setCaptureRequestOption(
                                 CaptureRequest.EDGE_MODE,
                                 CaptureRequest.EDGE_MODE_FAST
@@ -431,7 +585,10 @@ public class MainActivity extends AppCompatActivity {
                 // ========== 录制分析器配置 ==========
                 ImageAnalysis.Builder recordingBuilder = new ImageAnalysis.Builder()
                         .setTargetResolution(new Size(record_width, record_height))
-                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST);
+                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                        .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888);
+
+                configureStabilization(recordingBuilder, record_StabilizationMode, false);//防抖
 
                 new Camera2Interop.Extender<>(recordingBuilder)
                         .setCaptureRequestOption(
@@ -441,10 +598,6 @@ public class MainActivity extends AppCompatActivity {
                         .setCaptureRequestOption(
                                 CaptureRequest.SENSOR_FRAME_DURATION,
                                 (long)(1_000_000_000 / ((Integer) record_fps_Range.getUpper()))
-                        )
-                        .setCaptureRequestOption(//防抖
-                                CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
-                                CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON
                         )
                         .setCaptureRequestOption(
                                 CaptureRequest.NOISE_REDUCTION_MODE,
@@ -463,11 +616,15 @@ public class MainActivity extends AppCompatActivity {
                         recordingAnalysis
                 );
 
+                Now_Push_fps.set(push_fps_Range.getUpper());
+                Now_Record_fps.set(record_fps_Range.getUpper());
+
             } catch (ExecutionException | InterruptedException e) {
                 if (cameraProvider != null) {
                     cameraProvider.unbindAll();
                     cameraProvider = null;
                 }
+                setState(WorkflowState.ERROR);
                 Timber.e(e, "摄像头初始化失败");
                 throw new RuntimeException("摄像头初始化失败",e);
             }
@@ -497,6 +654,11 @@ public class MainActivity extends AppCompatActivity {
 
                 // 4. 重置预览视图
                 previewView.post(() -> previewView.setVisibility(View.GONE));
+
+                nowPushStabMode.set(StabilizationMode.OFF);//状态重置
+                nowRecordStabMode.set(StabilizationMode.OFF);
+                Now_Push_fps.set(-1);
+                Now_Record_fps.set(-1);
 
                 Timber.tag(TAG).i("摄像头已停止");
             } catch (Exception e) {
@@ -542,6 +704,8 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    /////////////////////////////////////////////////////////////////////////////////////////
+                                  //推流事件处理部分//***&&
 
     private void setupEventHandlers() {
         Disposable disposable = videoPusher.getReportSubject()
@@ -682,13 +846,20 @@ public class MainActivity extends AppCompatActivity {
             }
         }
         //生成新序号（两位数格式）
-        String newNumber = String.format(Locale.CHINA, "%02d", maxNumber + 1);
+        String newNumber = String.format(Locale.CHINA, "%03d", maxNumber + 1);
         //组合完整路径
         return new File(recordsDir,
                 "supercamera_record-" + dateStr + "_#" + newNumber + ".mp4"
         ).getAbsolutePath();
     }
 
+    public StabilizationMode getCurrentPushStabMode() {
+        return nowPushStabMode.get();
+    }
+
+    public StabilizationMode getCurrentRecordStabMode() {
+        return nowRecordStabMode.get();
+    }
 
     @Override
     protected void onDestroy() {
