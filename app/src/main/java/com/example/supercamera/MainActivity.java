@@ -5,6 +5,7 @@ import android.content.pm.PackageManager;
 import android.graphics.ImageFormat;
 import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CaptureRequest;
+import android.media.Image;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -38,6 +39,8 @@ import android.view.View;
 import java.io.File;
 import java.text.SimpleDateFormat;
 import java.util.Locale;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
@@ -97,6 +100,8 @@ public class MainActivity extends AppCompatActivity {
     private Button btnStop;
     private final CameraSelector cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA;
     private CompositeDisposable compositeDisposable;
+    private final ExecutorService StreamanalysisExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService RecordanalysisExecutor = Executors.newSingleThreadExecutor();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -582,6 +587,19 @@ public class MainActivity extends AppCompatActivity {
 
                 streamingAnalysis = streamingBuilder.build();
 
+                streamingAnalysis.setAnalyzer(StreamanalysisExecutor, image -> {
+                    @SuppressWarnings("UnsafeExperimentalUsageError")
+                    Image lowResImage = image.getImage();
+                    try {
+                        byte[] yuvData = YUVConverter.convertYUV420888ToYUV420P(lowResImage);
+                        videoPusher.getStreamingQueue().onNext(yuvData);
+                    } catch (IllegalArgumentException e) {
+                        Timber.tag(TAGCamera).e(e, "推流：Image format error");
+                    } finally {
+                        image.close(); // 确保关闭 Image
+                    }
+                });
+
                 // ========== 录制分析器配置 ==========
                 ImageAnalysis.Builder recordingBuilder = new ImageAnalysis.Builder()
                         .setTargetResolution(new Size(record_width, record_height))
@@ -605,6 +623,25 @@ public class MainActivity extends AppCompatActivity {
                         );
 
                 recordingAnalysis = recordingBuilder.build();
+
+                recordingAnalysis.setAnalyzer(RecordanalysisExecutor, image -> {
+                    @SuppressWarnings("UnsafeExperimentalUsageError")
+                    Image highResImage = image.getImage();
+                    try {
+                        if (videoRecorder == null || !videoRecorder.isRecording.get()) {
+                            setState(WorkflowState.ERROR);
+                            // 释放锁后再执行停止操作
+                            new Handler(Looper.getMainLooper()).post(() -> Stop());
+                            return;
+                        }
+                        byte[] yuvData = YUVConverter.convertYUV420888ToYUV420P(highResImage);
+                        videoRecorder.getRecordingQueue().onNext(yuvData);
+                    } catch (IllegalArgumentException e) {
+                        Timber.tag(TAGCamera).e(e, "录制：Image format error");
+                    } finally {
+                        image.close(); // 确保关闭 Image
+                    }
+                });
 
                 // ========== 绑定用例 ==========
                 CameraSelector cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA;
