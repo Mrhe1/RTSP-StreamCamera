@@ -4,12 +4,15 @@ import android.content.Context;
 import android.content.pm.PackageManager;
 import android.graphics.ImageFormat;
 import android.hardware.camera2.CameraCharacteristics;
+import android.hardware.camera2.CameraDevice;
 import android.hardware.camera2.CaptureRequest;
 import android.media.Image;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Size;
+
+import java.util.ArrayList;
 import java.util.Arrays;
 import androidx.annotation.NonNull;
 import androidx.annotation.OptIn;
@@ -32,6 +35,7 @@ import androidx.core.content.ContextCompat;
 import com.google.common.util.concurrent.ListenableFuture;
 import io.reactivex.rxjava3.android.schedulers.AndroidSchedulers;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
@@ -51,6 +55,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.Date;
+import java.util.stream.Collectors;
+
 import android.Manifest;
 import android.widget.Button;
 import android.util.Range;
@@ -241,13 +247,19 @@ public class MainActivity extends AppCompatActivity {
                           int record_height, int record_bitrate, int record_fps,
                       StabilizationMode push_StabilizationMode,
                       StabilizationMode record_StabilizationMode)
-    {//return 0:成功，1：正在推流，2：码率等设置不合规，3：推流出错，4：recordpath生成出错 ，5：其他错误
+    {//return 0:成功，1：正在推流，2：码率等设置不合规，3：推流出错，4：recordpath生成出错 ，5：录制器 Surface 初始化失败，6：其他错误
         synchronized (startStopLock) {
             if (currentState.get() != WorkflowState.READY) {
                 Timber.tag(TAG).e("开始失败，工作流已启动");
                 return 1;
             }
             setState(WorkflowState.STARTING);
+
+            // 检查 Surface 有效性
+            if (!videoRecorder.isSurfaceValid()) {
+                Timber.tag(TAG).e("录制器 Surface 初始化失败");
+                return 5;
+            }
 
             //验证push码率设置是否正确
             if (push_initMaxBitrate < push_initAvgBitrate || push_initMinBitrate > push_initAvgBitrate) {
@@ -276,7 +288,7 @@ public class MainActivity extends AppCompatActivity {
                 }
                 // 3. 初始化录制服务
                 videoRecorder = new VideoRecorder();
-                videoRecorder.startRecording(record_Path, record_width, record_height, record_fps, record_bitrate);
+                videoRecorder.prepareRecorder(record_width, record_height, record_fps, record_bitrate); // 提前准备
                 // 4. 初始化摄像头预览
                 previewView = findViewById(R.id.previewView);
                 // 5. 启动摄像头
@@ -284,7 +296,9 @@ public class MainActivity extends AppCompatActivity {
                         push_StabilizationMode, record_StabilizationMode);
                 // 6. 开始推流
                 videoPusher.startPush(push_Url);
-                // 7. 设置事件处理器
+                // 7. 开始录制
+                videoRecorder.startRecording(record_Path);
+                // 8. 设置事件处理器
                 setupEventHandlers();
                 setState(WorkflowState.WORKING);
                 return 0;
@@ -293,7 +307,7 @@ public class MainActivity extends AppCompatActivity {
                 Timber.tag(TAG).e("启动异常: %s", e.getMessage());
                 // 释放锁后再执行停止操作
                 new Handler(Looper.getMainLooper()).post(() -> Stop());
-                return 5;
+                return 6;
             }
         }
     }
@@ -649,6 +663,30 @@ public class MainActivity extends AppCompatActivity {
                         image.close(); // 确保关闭 Image
                     }
                 });
+
+                new Camera2Interop.Extender<>(previewBuilder)
+                        .addSessionConfigurationCallback(session -> {
+                            // 获取 CameraX 自动生成的 Surface（预览 + 推流分析）
+                            List<Surface> cameraXSurfaces = session.getOutputConfigurations()
+                                    .stream()
+                                    .map(output -> output.getSurface())
+                                    .collect(Collectors.toList());
+
+                            // 添加录制 Surface
+                            List<Surface> allSurfaces = new ArrayList<>(cameraXSurfaces);
+                            allSurfaces.add(recordingSurface);
+
+                            // 创建包含所有 Surface 的 CaptureRequest
+                            CaptureRequest.Builder requestBuilder = cameraDevice.createCaptureRequest(
+                                    CameraDevice.TEMPLATE_RECORD
+                            );
+                            for (Surface surface : allSurfaces) {
+                                requestBuilder.addTarget(surface);
+                            }
+
+                            // 保留原有参数配置（自动继承 CameraX 设置）
+                            session.setRepeatingRequest(requestBuilder.build(), null, null);
+                        });
 
                 // ========== 绑定用例 ==========
                 cameraProvider.bindToLifecycle(

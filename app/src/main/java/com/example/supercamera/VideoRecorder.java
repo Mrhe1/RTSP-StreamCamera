@@ -33,29 +33,15 @@ public class VideoRecorder {
     private final Object dimensionLock = new Object();
     private Surface inputSurface; //Surface成员
     private long lastPresentationTimeUs = 0;
+    private final AtomicBoolean isSurfaceReady = new AtomicBoolean(false);
 
-    public void startRecording(String outputPath, int width, int height, int fps, int bitrate) {
+    public void startRecording(String outputPath) {
         synchronized (dimensionLock) {
             if (isRecording.get()) {
                 throw new RuntimeException("已经开始录制，无法重复开启");
             }
 
             try {//bitrate单位kbps
-                this.width = width;
-                this.height = height;
-                // 1. 初始化视频编码器（H.264）
-                MediaFormat format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height);
-                format.setInteger(MediaFormat.KEY_BIT_RATE, bitrate * 1000);
-                format.setInteger(MediaFormat.KEY_FRAME_RATE, fps);
-                format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
-                format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1);//关键帧间隔s
-                format.setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR);//vbr
-                format.setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileHigh);
-                format.setInteger(MediaFormat.KEY_LEVEL, MediaCodecInfo.CodecProfileLevel.AVCLevel52);
-
-                videoEncoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC);
-                inputSurface = videoEncoder.createInputSurface(); //关键Surface获取
-                videoEncoder.start();
 
                 //异步回调
                 videoEncoder.setCallback(new MediaCodec.Callback() {
@@ -99,6 +85,43 @@ public class VideoRecorder {
                 throw new RuntimeException("录制初始化失败");
             }
         }
+    }
+
+    //提前创建编码器和Surface
+    public void prepareRecorder(int width, int height, int fps, int bitrate) {
+        synchronized (dimensionLock) {
+            try {
+                this.width = width;
+                this.height = height;
+
+                // 1. 提前初始化编码器（H.264）
+                MediaFormat format = MediaFormat.createVideoFormat(
+                        MediaFormat.MIMETYPE_VIDEO_AVC, width, height
+                );
+                format.setInteger(MediaFormat.KEY_BIT_RATE, bitrate * 1000);
+                format.setInteger(MediaFormat.KEY_FRAME_RATE, fps);
+                format.setInteger(MediaFormat.KEY_COLOR_FORMAT,
+                        MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
+                format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1);
+
+                videoEncoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC);
+                videoEncoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
+
+                // 2. 提前创建 Surface
+                inputSurface = videoEncoder.createInputSurface();
+                videoEncoder.start(); // 启动编码器但不立即开始录制
+
+                Timber.tag(TAG).d("编码器 Surface 已准备");
+            } catch (IOException e) {
+                Timber.tag(TAG).e(e, "编码器初始化失败");
+                cleanupResources();
+            }
+        }
+    }
+
+    // 新增方法：检查 Surface 有效性
+    public boolean isSurfaceValid() {
+        return inputSurface != null && inputSurface.isValid();
     }
 
     //Surface的方法
