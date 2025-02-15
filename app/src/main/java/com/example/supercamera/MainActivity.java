@@ -3,47 +3,40 @@ package com.example.supercamera;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.graphics.ImageFormat;
+import android.graphics.SurfaceTexture;
+import android.hardware.camera2.CameraAccessException;
+import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraDevice;
+import android.hardware.camera2.CameraManager;
 import android.hardware.camera2.CaptureRequest;
-import android.media.Image;
+import android.hardware.camera2.params.StreamConfigurationMap;
+import android.media.ImageReader;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.HandlerThread;
 import android.os.Looper;
 import android.util.Size;
 
 import java.util.ArrayList;
 import java.util.Arrays;
 import androidx.annotation.NonNull;
-import androidx.annotation.OptIn;
 import androidx.appcompat.app.AppCompatActivity;
-import androidx.camera.camera2.interop.Camera2CameraInfo;
-import androidx.camera.camera2.interop.ExperimentalCamera2Interop;
-import androidx.camera.core.Camera;
-import androidx.camera.core.CameraInfo;
 import androidx.camera.core.CameraSelector;
 import androidx.camera.core.ImageAnalysis;
 import androidx.camera.core.Preview;
 import androidx.camera.lifecycle.ProcessCameraProvider;
-import androidx.camera.video.Recorder;
-import androidx.camera.video.Recording;
-import androidx.camera.video.VideoCapture;
-import androidx.camera.view.PreviewView;
-import androidx.camera.camera2.interop.Camera2Interop;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
-import com.google.common.util.concurrent.ListenableFuture;
 import io.reactivex.rxjava3.android.schedulers.AndroidSchedulers;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Objects;
 import java.util.Set;
-import java.util.concurrent.ExecutionException;
 import io.reactivex.rxjava3.disposables.CompositeDisposable;
 import io.reactivex.rxjava3.disposables.Disposable;
 import timber.log.Timber;
-
 import android.view.Surface;
+import android.view.TextureView;
 import android.view.View;
 import java.io.File;
 import java.text.SimpleDateFormat;
@@ -55,14 +48,12 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.Date;
-import java.util.stream.Collectors;
-
 import android.Manifest;
 import android.widget.Button;
 import android.util.Range;
+import android.widget.FrameLayout;
 
-
-@androidx.camera.core.ExperimentalGetImage
+/////////////////////////////////////////////注意要求push与record帧率一致！！！！#####
 public class MainActivity extends AppCompatActivity {
     // 新增防抖模式枚举
     public enum StabilizationMode {
@@ -93,7 +84,6 @@ public class MainActivity extends AppCompatActivity {
 
     private VideoPusher videoPusher;
     private VideoRecorder videoRecorder;
-    private PreviewView previewView;
     private static final String TAG = "MaiActivity";
     private static final String TAGCamera = "StartCamera";
     private static final String TAGWorkflowState = "WorkflowState";
@@ -113,14 +103,34 @@ public class MainActivity extends AppCompatActivity {
     private CompositeDisposable compositeDisposable;
     private final ExecutorService StreamanalysisExecutor = Executors.newSingleThreadExecutor();
     private  ExecutorService RecordanalysisExecutor = Executors.newSingleThreadExecutor();
-    private VideoCapture<Recorder> videoCapture;
-    private Recording activeRecording;
+    //private VideoCapture<Recorder> videoCapture;
+    //private Recording activeRecording;
+    private CameraDevice cameraDevice;
+    private CameraCaptureSession cameraCaptureSession;
+    private Handler cameraHandler;
+    private String cameraId;
+    // camera错误代码常量
+    private static final int ERROR_CAMERA_IN_USE = 1;
+    private static final int ERROR_MAX_CAMERAS_IN_USE = 2;
+    private static final int ERROR_CAMERA_DEVICE = 3;
+    private static final int ERROR_CAMERA_DISABLED = 4;
+    private static final int ERROR_CAMERA_SERVICE = 5;
+    private static final int SURFACE_TIMEOUT = 6;
+    private TextureView textureView;
+    private SurfaceTexture surfaceTexture;
+    private volatile boolean isSurfaceAvailable = false;
+    private final Object surfaceLock = new Object();
+    private Surface previewSurface = null;
+
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         compositeDisposable = new CompositeDisposable();
         setContentView(R.layout.activity_main);
+
+        textureView = findViewById(R.id.textureView);
+        textureView.setSurfaceTextureListener(surfaceTextureListener);
 
         setpermitted(checkCameraPermission());//权限检查
         if (!ispermitted()) {
@@ -170,7 +180,7 @@ public class MainActivity extends AppCompatActivity {
         // 初始化推流参数
         int push_width = 1280;
         int push_height = 720;
-        int push_fps = 30;
+        int push_fps = 30;//**现阶段push——fps必须============record——fps**&*&&&&
         int push_initAvgBitrate = 2500;//单位kbps
         int push_initMaxBitrate = 4000;
         int push_initMinBitrate = 1000;
@@ -255,12 +265,6 @@ public class MainActivity extends AppCompatActivity {
             }
             setState(WorkflowState.STARTING);
 
-            // 检查 Surface 有效性
-            if (!videoRecorder.isSurfaceValid()) {
-                Timber.tag(TAG).e("录制器 Surface 初始化失败");
-                return 5;
-            }
-
             //验证push码率设置是否正确
             if (push_initMaxBitrate < push_initAvgBitrate || push_initMinBitrate > push_initAvgBitrate) {
                 Timber.tag(TAG).e("码率设置不合规");
@@ -288,17 +292,18 @@ public class MainActivity extends AppCompatActivity {
                 }
                 // 3. 初始化录制服务
                 videoRecorder = new VideoRecorder();
-                videoRecorder.prepareRecorder(record_width, record_height, record_fps, record_bitrate); // 提前准备
-                // 4. 初始化摄像头预览
-                previewView = findViewById(R.id.previewView);
+                videoRecorder.startRecording(record_width, record_height, record_fps, record_bitrate, record_Path); // 提前准备
+                // 4. 检查 record Surface 有效性
+                if (!videoRecorder.isSurfaceValid()) {
+                    Timber.tag(TAG).e("录制器 Surface 初始化失败");
+                    return 5;
+                }
                 // 5. 启动摄像头
-                startCamera(push_width, push_height, record_width, record_height, push_fps, record_fps,
+                startCamera(push_width, push_height, record_width, record_height, push_fps,
                         push_StabilizationMode, record_StabilizationMode);
                 // 6. 开始推流
                 videoPusher.startPush(push_Url);
-                // 7. 开始录制
-                videoRecorder.startRecording(record_Path);
-                // 8. 设置事件处理器
+                // 7. 设置事件处理器
                 setupEventHandlers();
                 setState(WorkflowState.WORKING);
                 return 0;
@@ -326,9 +331,7 @@ public class MainActivity extends AppCompatActivity {
                     videoPusher = null;
                 }
                 // 2. 停止摄像头
-                if (cameraProvider != null) {
-                    stopCamera();
-                }
+                stopCamera();
                 // 3. 停止录制
                 if (videoRecorder != null) {
                     videoRecorder.stopRecording();
@@ -351,405 +354,455 @@ public class MainActivity extends AppCompatActivity {
     }
 /////////////////////////////////////////////////////////////////////////////////////////////
                                   //CAMERA部分//***&&
-    //获取fps的range
-    private Range<Integer> getFpsRange(int fps) {
-        try {
-            // 获取设备支持的帧率范围
-            CameraInfo cameraInfo = cameraProvider.getAvailableCameraInfos().get(0);
-            Set<Range<Integer>> supportedRanges = cameraInfo.getSupportedFrameRateRanges();
-
-            // 策略 1：优先匹配精确帧率
-            for (Range<Integer> range : supportedRanges) {
-                if (range.getLower() == fps && range.getUpper() == fps) {
-                    return range;
+//SurfaceTexture监听器
+private final TextureView.SurfaceTextureListener surfaceTextureListener =
+        new TextureView.SurfaceTextureListener() {
+            @Override
+            public void onSurfaceTextureAvailable(@NonNull SurfaceTexture surface, int width, int height) {
+                synchronized (surfaceLock) {
+                    surfaceTexture = surface;
+                    isSurfaceAvailable = true;
+                    surfaceLock.notifyAll();
                 }
             }
 
-            // 策略 2：匹配包含目标帧率的范围
-            for (Range<Integer> range : supportedRanges) {
-                if (range.contains(fps)) {
-                    return new Range<>(fps, fps); // 限定为固定值
+            @Override
+            public void onSurfaceTextureSizeChanged(@NonNull SurfaceTexture surface, int width, int height) {
+                // 处理尺寸变化
+            }
+
+            @Override
+            public boolean onSurfaceTextureDestroyed(@NonNull SurfaceTexture surface) {
+                synchronized (surfaceLock) {
+                    isSurfaceAvailable = false;
                 }
-            }
-
-            //降级到最低可用帧率
-            int minFps = Integer.MAX_VALUE;
-            for (Range<Integer> range : supportedRanges) {
-                minFps = Math.min(minFps, range.getLower());
-            }
-            return new Range<>(minFps, minFps);
-        }
-        catch (Exception e) {
-            Timber.tag(TAGCamera).e(e, "帧率配置失败");
-            return new Range<>(30, 30); // 最终保底值
-        }
-    }
-
-    //检查分辨率
-    @OptIn(markerClass = ExperimentalCamera2Interop.class)
-    private boolean checkResolutionSupport(int push_width, int push_height,
-                                                  int record_width, int record_height) {
-        if (cameraProvider == null) {
-            Timber.tag(TAGCamera).e("CameraProvider 未初始化");
-            return false;
-        }
-
-        // 通过 CameraX 直接获取 Camera2 特性
-        Camera camera = cameraProvider.bindToLifecycle(this, cameraSelector);
-        Camera2CameraInfo camera2Info = Camera2CameraInfo.from(camera.getCameraInfo());
-
-        // 获取 YUV_420_888 格式的所有支持分辨率
-        Size[] supportedSizes = Objects.requireNonNull(camera2Info.getCameraCharacteristic(
-                CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP
-        )).getOutputSizes(ImageFormat.YUV_420_888);
-
-        // 要检查的目标分辨率数组
-        Size[] targetSizes = {
-                new Size(push_width, push_height),  // 预览
-                new Size(record_width, record_height)  // 录制
-        };
-
-        // 将支持的尺寸转换为HashSet加速查找
-        Set<Size> sizeSet = new HashSet<>(Arrays.asList(supportedSizes));
-
-        // 检查所有目标尺寸是否存在于支持列表中
-        for (Size targetSize : targetSizes) {
-            if (!sizeSet.contains(targetSize)) {
-                Timber.tag(TAGCamera).e("分辨率 %dx%d 不支持", targetSize.getWidth(), targetSize.getHeight());
                 return false;
             }
+
+            @Override
+            public void onSurfaceTextureUpdated(@NonNull SurfaceTexture surface) {
+            }
+        };
+
+    // 等待Surface准备方法
+    private void waitForSurfaceReady() {
+        synchronized (surfaceLock) {
+            if (!isSurfaceAvailable) {
+                try {
+                    surfaceLock.wait(3000); // 最多等待3秒
+                    if (!isSurfaceAvailable) {
+                        throw new RuntimeException("Surface准备超时");
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
         }
-        return true;
     }
 
-    //检查硬件防抖支持
-    @OptIn(markerClass = ExperimentalCamera2Interop.class)
-    private boolean[] checkStabilizationSupport() {
-        //预览防抖,1:光学防抖 (OIS),2:电子防抖 (EIS)
-        boolean[] isStabilizationSupport = {false,false,false};
+    // 分辨率检查
+    private boolean checkResolutionSupport(int pushWidth, int pushHeight, int recordWidth, int recordHeight) {
         try {
-            Camera camera = cameraProvider.bindToLifecycle(this, cameraSelector);
-            Camera2CameraInfo camera2Info = Camera2CameraInfo.from(camera.getCameraInfo());
-            int[] modes = camera2Info.getCameraCharacteristic(
-                    CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES
-            );
+            CameraManager manager = (CameraManager) getSystemService(Context.CAMERA_SERVICE);
+            CameraCharacteristics characteristics = manager.getCameraCharacteristics(cameraId);
+            StreamConfigurationMap map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
 
-            for (int mode : modes) {
-                if (mode == CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_PREVIEW_STABILIZATION ) {
-                    isStabilizationSupport[0] = true;
-                }
-                if (mode == CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON) {//EIS
-                    isStabilizationSupport[2] = true;
-                }
+            // 检查推流分辨率（YUV格式）
+            Size[] supportedYuvSizes = map.getOutputSizes(ImageFormat.YUV_420_888);
+            if (supportedYuvSizes == null) {
+                Timber.e("设备不支持YUV_420_888格式");
+                return false;
+            }
+            Set<Size> yuvSizeSet = new HashSet<>(Arrays.asList(supportedYuvSizes));
+            Size pushSize = new Size(pushWidth, pushHeight);
+            if (!yuvSizeSet.contains(pushSize)) {
+                Timber.e("推流分辨率 %dx%d 不支持YUV格式", pushWidth, pushHeight);
+                return false;
             }
 
-            int[] OISModes = camera2Info.getCameraCharacteristic(
-                    CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION);
-
-            for (int mode : OISModes) {
-                if (mode == CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON) {//OIS
-                    isStabilizationSupport[1] = true;
-                }
+            // 检查录制分辨率（Surface格式）
+            Size[] supportedSurfaceSizes = map.getOutputSizes(SurfaceTexture.class);
+            if (supportedSurfaceSizes == null) {
+                Timber.e("设备不支持Surface输出");
+                return false;
             }
-        } catch (Exception e) {
-            Timber.e("检查硬件防抖支持失败: %s", e.getMessage());
+            Set<Size> surfaceSizeSet = new HashSet<>(Arrays.asList(supportedSurfaceSizes));
+            Size recordSize = new Size(recordWidth, recordHeight);
+            if (!surfaceSizeSet.contains(recordSize)) {
+                Timber.e("录制分辨率 %dx%d 不支持Surface输出", recordWidth, recordHeight);
+                return false;
+            }
+
+            return true;
+        } catch (CameraAccessException e) {
+            handleCameraError(ERROR_CAMERA_SERVICE);
+            return false;
+        } catch (NullPointerException e) {
+            Timber.e("摄像头配置异常: %s", e.getMessage());
+            return false;
         }
-        return isStabilizationSupport;
     }
 
-    //设置防抖
-    // 修改configureStabilization方法签名，添加isPush参数区分推流/录制
-    @ExperimentalCamera2Interop
-    private void configureStabilization(ImageAnalysis.Builder builder,
-                                        StabilizationMode requestedMode,
-                                        boolean isPush) {
-        boolean[] supportModes = checkStabilizationSupport();
-        StabilizationMode finalMode = requestedMode;
+    // 帧率获取方法
+    private Range<Integer> getFpsRange(int targetFps) {
+        try {
+            CameraManager manager = (CameraManager) getSystemService(Context.CAMERA_SERVICE);
+            CameraCharacteristics characteristics = manager.getCameraCharacteristics(cameraId);
 
-        switch (requestedMode) {
-            case OIS_ONLY:
-                if (supportModes[1]) {
-                    enableOIS(builder);
-                } else if (supportModes[2]) {
-                    enableEIS(builder);
-                    finalMode = StabilizationMode.EIS_ONLY;
-                    Timber.tag(TAGCamera).w("OIS不可用，自动降级到EIS");
-                }else {
-                    finalMode = StabilizationMode.OFF;
-                    Timber.tag(TAGCamera).w("OIS和EIS均不可用，自动降级到OFF");
+            Range<Integer>[] availableRanges = characteristics.get(
+                    CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES);
+
+            // 第一阶段：寻找精确匹配的固定帧率
+            Range<Integer> exactRange = null;
+            for (Range<Integer> range : availableRanges) {
+                if (range.getLower() == targetFps && range.getUpper() == targetFps) {
+                    exactRange = range;
+                    break; // 优先选择第一个精确匹配项
                 }
-                break;
-            case EIS_ONLY:
-                if (supportModes[2]) {
-                    enableEIS(builder);
-                } else if (supportModes[1]) {
-                    enableOIS(builder);
-                    finalMode = StabilizationMode.OIS_ONLY;
-                    Timber.tag(TAGCamera).w("EIS不可用，自动降级到OIS");
-                }else {
-                    finalMode = StabilizationMode.OFF;
-                    Timber.tag(TAGCamera).w("OIS和EIS均不可用，自动降级到OFF");
+            }
+            if (exactRange != null) return exactRange;
+
+            // 第二阶段：选择包含目标帧率的最佳范围
+            Range<Integer> bestDynamicRange = null;
+            for (Range<Integer> range : availableRanges) {
+                if (range.getUpper() >= targetFps && range.getLower() <= targetFps) {
+                    if (bestDynamicRange == null
+                            || (range.getUpper() > bestDynamicRange.getUpper()) // 优先更高上限
+                            || (range.getUpper() == bestDynamicRange.getUpper()
+                            && range.getLower() > bestDynamicRange.getLower())) { // 次优先更高下限
+                        bestDynamicRange = range;
+                    }
                 }
-                break;
-            case HYBRID:
-                if (supportModes[1] && supportModes[2]) {
-                    enableHybrid(builder);
+            }
+            if (bestDynamicRange != null) return bestDynamicRange;
+
+            // 第三阶段：降级选择最低可用帧率
+            int minFps = Integer.MAX_VALUE;
+            for (Range<Integer> range : availableRanges) {
+                minFps = Math.min(minFps, range.getLower());
+            }
+            return new Range<>(Math.max(minFps, 15), Math.max(minFps, 15)); // 保证最低15fps
+        } catch (CameraAccessException e) {
+            handleCameraError(ERROR_CAMERA_SERVICE);
+            return new Range<>(30, 30); // 默认安全值
+        }
+    }
+
+
+    // 核心摄像头启动方法
+    private void startCamera(int pushWidth, int pushHeight, int recordWidth,
+                             int recordHeight, int targetFps,
+                             StabilizationMode pushStabMode,
+                             StabilizationMode recordStabMode) {
+        try {
+            waitForSurfaceReady(); // 确保Surface就绪
+        } catch (RuntimeException e) {
+            handleCameraError(SURFACE_TIMEOUT);
+            return;
+        }
+
+        // 初始化摄像头线程
+        HandlerThread cameraThread = new HandlerThread("CameraBackground");
+        cameraThread.start();
+        cameraHandler = new Handler(cameraThread.getLooper());
+
+        try {
+            CameraManager manager = (CameraManager) getSystemService(Context.CAMERA_SERVICE);
+
+            // 查找后置摄像头
+            for (String id : manager.getCameraIdList()) {
+                CameraCharacteristics characteristics = manager.getCameraCharacteristics(id);
+                Integer facing = characteristics.get(CameraCharacteristics.LENS_FACING);
+                if (facing != null && facing == CameraCharacteristics.LENS_FACING_BACK) {
+                    cameraId = id;
+                    break;
+                }
+            }
+
+            if (cameraId == null) {
+                handleCameraError(ERROR_CAMERA_DEVICE);
+                return;
+            }
+
+            // 检查硬件支持
+            if (!checkResolutionSupport(pushWidth, pushHeight, recordWidth, recordHeight)) {
+                handleCameraError(ERROR_CAMERA_DEVICE);
+                return;
+            }
+
+            // 打开摄像头
+            manager.openCamera(cameraId, new CameraDevice.StateCallback() {
+                @Override
+                public void onOpened(@NonNull CameraDevice device) {
+                    cameraDevice = device;
+                    configureSession(pushWidth, pushHeight, recordWidth, recordHeight, targetFps,
+                            pushStabMode, recordStabMode);
+                }
+
+                @Override
+                public void onDisconnected(@NonNull CameraDevice device) {
+                    device.close();
+                    cameraDevice = null;
+                }
+
+                @Override
+                public void onError(@NonNull CameraDevice device, int error) {
+                    handleCameraError(error);
+                    device.close();
+                    cameraDevice = null;
+                }
+            }, cameraHandler);
+        } catch (CameraAccessException e) {
+            handleCameraError(ERROR_CAMERA_SERVICE);
+        } catch (SecurityException e) {
+            handleCameraError(ERROR_CAMERA_DISABLED);
+        }
+    }
+
+    // 配置摄像头会话
+    private void configureSession(int pushWidth, int pushHeight, int recordWidth,
+                                  int recordHeight, int targetFps,
+                                  StabilizationMode pushStabMode,
+                                  StabilizationMode recordStabMode) {
+        Surface previewSurface = null;
+
+        try {
+            // 准备Surface列表
+            List<Surface> surfaces = new ArrayList<>();
+
+            // 预览Surface
+            synchronized (surfaceLock) {
+                if (surfaceTexture == null) {
+                    handleCameraError(ERROR_CAMERA_DEVICE);
+                    return;
+                }
+                surfaceTexture.setDefaultBufferSize(pushWidth, pushHeight);
+                previewSurface = new Surface(surfaceTexture);
+                surfaces.add(previewSurface);
+            }
+
+            // 推流Surface (ImageReader)
+            ImageReader streamingReader = ImageReader.newInstance(
+                    pushWidth, pushHeight, ImageFormat.YUV_420_888, 3);
+            surfaces.add(streamingReader.getSurface());
+
+            // 录制Surface
+            try {
+                Surface recordingSurface = videoRecorder.getInputSurface();
+                surfaces.add(recordingSurface);
+            } catch (IllegalStateException e) {
+                handleCameraError(SURFACE_TIMEOUT);
+                return;
+            }
+
+            // 创建CaptureRequest构建器
+            CaptureRequest.Builder requestBuilder = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_RECORD);
+            // 添加预览Surface
+            if (previewSurface != null) {
+                requestBuilder.addTarget(previewSurface);
+            } else {
+                handleCameraError(ERROR_CAMERA_DEVICE);
+                return;
+            }
+
+            // 配置公共参数
+            Range<Integer> fpsRange = getFpsRange(targetFps);
+            requestBuilder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, fpsRange);
+
+            // 配置防抖模式
+            configureStabilization(requestBuilder, pushStabMode, recordStabMode);
+
+            // 添加所有Surface
+            for (Surface surface : surfaces) {
+                requestBuilder.addTarget(surface);
+            }
+
+            // 预览显示逻辑
+            textureView.post(() -> {
+                // 设置合适的宽高比
+                int viewWidth = textureView.getWidth();
+                int viewHeight = textureView.getHeight();
+                float aspectRatio = (float) pushWidth / pushHeight;
+
+                // 计算调整后的尺寸
+                if (viewHeight > (viewWidth / aspectRatio)) {
+                    textureView.setLayoutParams(new FrameLayout.LayoutParams(
+                            viewWidth, (int) (viewWidth / aspectRatio)));
                 } else {
-                    finalMode = supportModes[1] ? StabilizationMode.OIS_ONLY :
-                            supportModes[2] ? StabilizationMode.EIS_ONLY : StabilizationMode.OFF;
-                    Timber.tag(TAGCamera).w("混合模式不可用，降级到%s", finalMode.name());
+                    textureView.setLayoutParams(new FrameLayout.LayoutParams(
+                            (int) (viewHeight * aspectRatio), viewHeight));
                 }
+
+                // 延迟显示确保布局完成
+                new Handler().postDelayed(() ->
+                        textureView.setVisibility(View.VISIBLE), 100);
+            });
+
+
+            // 创建摄像头会话
+            cameraDevice.createCaptureSession(surfaces, new CameraCaptureSession.StateCallback() {
+                @Override
+                public void onConfigured(@NonNull CameraCaptureSession session) {
+                    cameraCaptureSession = session;
+                    try {
+                        session.setRepeatingRequest(requestBuilder.build(), null, cameraHandler);
+                        Now_Push_fps.set(fpsRange.getUpper());
+                        Now_Record_fps.set(fpsRange.getUpper());
+                    } catch (CameraAccessException e) {
+                        handleCameraError(ERROR_CAMERA_SERVICE);
+                    }
+                }
+
+                @Override
+                public void onConfigureFailed(@NonNull CameraCaptureSession session) {
+                    handleCameraError(ERROR_CAMERA_DEVICE);
+                }
+            }, cameraHandler);
+        } catch (CameraAccessException e) {
+            handleCameraError(ERROR_CAMERA_SERVICE);
+        }
+    }
+
+    // 防抖配置方法
+    private void configureStabilization(CaptureRequest.Builder builder,
+                                        StabilizationMode pushMode,
+                                        StabilizationMode recordMode) {
+        try {
+            CameraManager manager = (CameraManager) getSystemService(Context.CAMERA_SERVICE);
+            CameraCharacteristics characteristics = manager.getCameraCharacteristics(cameraId);
+
+            // 获取设备支持情况
+            int[] videoStabModes = characteristics.get(
+                    CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES);
+            boolean eisSupported = Arrays.stream(videoStabModes).anyMatch(
+                    m -> m == CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON);
+
+            int[] oisModes = characteristics.get(
+                    CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION);
+            boolean oisSupported = Arrays.stream(oisModes).anyMatch(
+                    m -> m == CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON);
+
+            // OIS全局配置（任一模式请求即开启）
+            boolean enableOIS = pushMode == StabilizationMode.OIS_ONLY ||
+                    pushMode == StabilizationMode.HYBRID ||
+                    recordMode == StabilizationMode.OIS_ONLY ||
+                    recordMode == StabilizationMode.HYBRID;
+            if(enableOIS && oisSupported)
+            {
+                enableOIS = true;
+            }
+            else{
+                enableOIS = false;
+            }
+
+            // OIS全局配置（任一模式请求即开启）
+            boolean enableEIS = pushMode == StabilizationMode.EIS_ONLY ||
+                    pushMode == StabilizationMode.HYBRID ||
+                    recordMode == StabilizationMode.EIS_ONLY ||
+                    recordMode == StabilizationMode.HYBRID;
+            if(enableEIS ==true && eisSupported)
+            {
+                enableEIS = true;
+            }
+            else{
+                enableEIS = false;
+            }
+
+            // 应用配置
+            applyStabilization(builder, enableOIS , enableEIS);
+
+            // 记录实际生效模式
+            nowPushStabMode.set(calcEffectiveMode(enableOIS , enableEIS));
+            nowRecordStabMode.set(calcEffectiveMode(enableOIS, enableEIS));
+
+        } catch (CameraAccessException e) {
+            handleCameraError(ERROR_CAMERA_SERVICE);
+        }
+    }
+
+    private StabilizationMode calcEffectiveMode(boolean oisEnabled, boolean eisEnabled) {
+        if (oisEnabled && eisEnabled) return StabilizationMode.HYBRID;
+        if (oisEnabled) return StabilizationMode.OIS_ONLY;
+        if (eisEnabled) return StabilizationMode.EIS_ONLY;
+        return StabilizationMode.OFF;
+    }
+
+    private void applyStabilization(CaptureRequest.Builder builder,
+                                    boolean enableOIS,
+                                    boolean enableEIS) {
+        // OIS配置（全局生效）
+        builder.set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
+                enableOIS ? CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON
+                        : CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF);
+
+        // OIS配置（全局生效）
+        if (enableEIS) {
+            builder.set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
+                    CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON);
+        }
+    }
+
+    // 错误处理方法
+    private void handleCameraError(int errorCode) {
+        String errorDesc;
+        switch (errorCode) {
+            case ERROR_CAMERA_IN_USE:
+                errorDesc = "摄像头被其他进程占用";
                 break;
+            case ERROR_MAX_CAMERAS_IN_USE:
+                errorDesc = "达到最大摄像头使用数";
+                break;
+            case ERROR_CAMERA_DEVICE:
+                errorDesc = "摄像头硬件故障";
+                break;
+            case ERROR_CAMERA_DISABLED:
+                errorDesc = "摄像头被管理员禁用";
+                break;
+            case ERROR_CAMERA_SERVICE:
+                errorDesc = "摄像头服务异常";
+                break;
+            case SURFACE_TIMEOUT:
+                errorDesc = "Surface准备超时";
+                break;
+            default:
+                errorDesc = "未知错误";
         }
 
-        // 根据isPush参数更新对应状态变量
-        if (isPush) {
-            nowPushStabMode.set(finalMode);
-        } else {
-            nowRecordStabMode.set(finalMode);
-        }
+        Timber.tag(TAGCamera).e("摄像头错误[%d]: %s", errorCode, errorDesc);
+        setState(WorkflowState.ERROR);
+        Stop();
     }
 
-
-    @ExperimentalCamera2Interop
-    private void enableEIS(ImageAnalysis.Builder builder) {
-        new Camera2Interop.Extender<>(builder)
-                .setCaptureRequestOption(
-                        CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
-                        CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON
-                );
-    }
-
-    @ExperimentalCamera2Interop
-    private void enableOIS(ImageAnalysis.Builder builder) {
-        new Camera2Interop.Extender<>(builder)
-                .setCaptureRequestOption(
-                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
-                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON
-                );
-    }
-
-    @ExperimentalCamera2Interop
-    private void enableHybrid(ImageAnalysis.Builder builder) {
-        new Camera2Interop.Extender<>(builder)
-                .setCaptureRequestOption(
-                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
-                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON
-                )
-                .setCaptureRequestOption(
-                        CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
-                        CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON
-                );
-    }
-
-
-    @OptIn(markerClass = ExperimentalCamera2Interop.class)
-    private void startCamera(int push_width, int push_height, int record_width,
-                             int record_height, int push_fps, int record_fps,
-                             StabilizationMode push_StabilizationMode,
-                             StabilizationMode record_StabilizationMode) {
-        if (cameraProvider != null) {//解除之前的绑定
-            cameraProvider.unbind(preview, streamingAnalysis, recordingAnalysis);
-        }
-
-        ListenableFuture<ProcessCameraProvider> cameraProviderFuture = ProcessCameraProvider.getInstance(this);
-        cameraProviderFuture.addListener(() -> {
-            try {
-                cameraProvider = cameraProviderFuture.get();
-
-                //检查摄像头是否支持流组合
-                if (!checkResolutionSupport(push_width, push_height, record_width, record_height)) {
-                    Timber.tag(TAGCamera).e("相机不支持分辨率");
-                    setState(WorkflowState.ERROR);
-                    throw new RuntimeException("相机不支持分辨率");
-                }
-
-                //获取fps——range
-                Range<Integer> push_fps_Range = getFpsRange(push_fps);
-                Range<Integer> record_fps_Range = getFpsRange(record_fps);//不支持返回最低帧率
-
-                // ========== 预览配置 ==========
-                Preview.Builder previewBuilder = new Preview.Builder()
-                        .setTargetResolution(new Size(push_width, push_height));
-                //用camera2配置扩展
-                new Camera2Interop.Extender<>(previewBuilder)
-                        .setCaptureRequestOption(
-                                CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,
-                                push_fps_Range
-                        );
-
-                preview = previewBuilder.build();
-                preview.setSurfaceProvider(previewView.getSurfaceProvider());
-
-                // ========== 推流分析器配置 ==========
-                ImageAnalysis.Builder streamingBuilder = new ImageAnalysis.Builder()
-                        .setTargetResolution(new Size(push_width, push_height))
-                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                        .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888);
-
-                configureStabilization(streamingBuilder, push_StabilizationMode, true);//防抖
-                new Camera2Interop.Extender<>(streamingBuilder)
-                        .setCaptureRequestOption(
-                                CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,
-                                push_fps_Range
-                        )
-                        .setCaptureRequestOption(
-                                CaptureRequest.SENSOR_FRAME_DURATION,
-                                (long)(1_000_000_000 / ((Integer) push_fps_Range.getUpper()))
-                        )
-                        .setCaptureRequestOption(
-                                CaptureRequest.CONTROL_MODE,
-                                CaptureRequest.CONTROL_MODE_AUTO
-                        )
-                        .setCaptureRequestOption(
-                                CaptureRequest.EDGE_MODE,
-                                CaptureRequest.EDGE_MODE_FAST
-                        );
-
-                streamingAnalysis = streamingBuilder.build();
-
-                streamingAnalysis.setAnalyzer(StreamanalysisExecutor, image -> {
-                    @SuppressWarnings("UnsafeExperimentalUsageError")
-                    Image lowResImage = image.getImage();
-                    try {
-                        byte[] yuvData = YUVConverter.convertYUV420888ToYUV420P(lowResImage);
-                        videoPusher.getStreamingQueue().onNext(yuvData);
-                    } catch (IllegalArgumentException e) {
-                        Timber.tag(TAGCamera).e(e, "推流：Image format error");
-                    } finally {
-                        image.close(); // 确保关闭 Image
-                    }
-                });
-
-                // ========== 录制分析器配置 ==========
-                ImageAnalysis.Builder recordingBuilder = new ImageAnalysis.Builder()
-                        .setTargetResolution(new Size(record_width, record_height))
-                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                        .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888);
-
-                configureStabilization(recordingBuilder, record_StabilizationMode, false);//防抖
-
-                new Camera2Interop.Extender<>(recordingBuilder)
-                        .setCaptureRequestOption(
-                                CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,
-                                record_fps_Range
-                        )
-                        .setCaptureRequestOption(
-                                CaptureRequest.SENSOR_FRAME_DURATION,
-                                (long)(1_000_000_000 / ((Integer) record_fps_Range.getUpper()))
-                        )
-                        .setCaptureRequestOption(
-                                CaptureRequest.NOISE_REDUCTION_MODE,
-                                CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY
-                        );
-
-                recordingAnalysis = recordingBuilder.build();
-
-                recordingAnalysis.setAnalyzer(RecordanalysisExecutor, image -> {
-                    @SuppressWarnings("UnsafeExperimentalUsageError")
-                    Image highResImage = image.getImage();
-                    try {
-                        if (videoRecorder == null || !videoRecorder.isRecording.get()) {
-                            setState(WorkflowState.ERROR);
-                            //异步停止操作
-                            new Handler(Looper.getMainLooper()).post(() -> Stop());
-                            return;
-                        }
-                        byte[] yuvData = YUVConverter.convertYUV420888ToYUV420P(highResImage);
-                        //videoRecorder.getRecordingQueue().onNext(yuvData);
-                    } catch (IllegalArgumentException e) {
-                        Timber.tag(TAGCamera).e(e, "录制：Image format error");
-                    } finally {
-                        image.close(); // 确保关闭 Image
-                    }
-                });
-
-                new Camera2Interop.Extender<>(previewBuilder)
-                        .addSessionConfigurationCallback(session -> {
-                            // 获取 CameraX 自动生成的 Surface（预览 + 推流分析）
-                            List<Surface> cameraXSurfaces = session.getOutputConfigurations()
-                                    .stream()
-                                    .map(output -> output.getSurface())
-                                    .collect(Collectors.toList());
-
-                            // 添加录制 Surface
-                            List<Surface> allSurfaces = new ArrayList<>(cameraXSurfaces);
-                            allSurfaces.add(recordingSurface);
-
-                            // 创建包含所有 Surface 的 CaptureRequest
-                            CaptureRequest.Builder requestBuilder = cameraDevice.createCaptureRequest(
-                                    CameraDevice.TEMPLATE_RECORD
-                            );
-                            for (Surface surface : allSurfaces) {
-                                requestBuilder.addTarget(surface);
-                            }
-
-                            // 保留原有参数配置（自动继承 CameraX 设置）
-                            session.setRepeatingRequest(requestBuilder.build(), null, null);
-                        });
-
-                // ========== 绑定用例 ==========
-                cameraProvider.bindToLifecycle(
-                        this,
-                        cameraSelector,
-                        preview,
-                        streamingAnalysis,
-                        //recordingAnalysis,
-                        videoCapture
-                );
-
-                Now_Push_fps.set(push_fps_Range.getUpper());
-                Now_Record_fps.set(record_fps_Range.getUpper());
-
-            } catch (ExecutionException | InterruptedException e) {
-                if (cameraProvider != null) {
-                    cameraProvider.unbindAll();
-                    cameraProvider = null;
-                }
-                setState(WorkflowState.ERROR);
-                Timber.e(e, "摄像头初始化失败");
-                throw new RuntimeException("摄像头初始化失败",e);
-            }
-        }, ContextCompat.getMainExecutor(this));
-    }
-
+    // 停止摄像头
     private void stopCamera() {
-        if (cameraProvider != null) {
-            try {
-                // 1. 解除所有绑定
-                cameraProvider.unbindAll();
-
-                // 2. 关闭分析器
-                if (streamingAnalysis != null) {
-                    streamingAnalysis.clearAnalyzer();
-                    streamingAnalysis = null;
+        try {
+            runOnUiThread(() -> {
+                if (textureView != null) {
+                    textureView.setVisibility(View.GONE);
+                    textureView = null;
                 }
-                if (recordingAnalysis != null) {
-                    recordingAnalysis.clearAnalyzer();
-                    recordingAnalysis = null;
-                }
+            });
 
-                // 3. 释放预览资源
-                if (preview != null) {
-                    preview.setSurfaceProvider(null);
-                }
-
-                // 4. 重置预览视图
-                previewView.post(() -> previewView.setVisibility(View.GONE));
-
-                nowPushStabMode.set(StabilizationMode.OFF);//状态重置
-                nowRecordStabMode.set(StabilizationMode.OFF);
-                Now_Push_fps.set(-1);
-                Now_Record_fps.set(-1);
-
-                Timber.tag(TAG).i("摄像头已停止");
-            } catch (Exception e) {
-                Timber.tag(TAG).e(e, "停止摄像头失败");
+            // 统一释放所有资源
+            if (cameraCaptureSession != null) {
+                cameraCaptureSession.close();
+                cameraCaptureSession = null;
             }
-            cameraProvider = null;
+            if (cameraDevice != null) {
+                cameraDevice.close();
+                cameraDevice = null;
+            }
+            if (cameraHandler != null) {
+                cameraHandler.getLooper().quitSafely();
+            }
+        }
+        catch (Exception e) {
+            Timber.tag(TAGCamera).e("摄像头关闭失败:%s",e.getMessage());
         }
     }
 
+    ////////////////////////////////////////////////////////////////////////////////////////
+                                  //权限请求部分//***&&
     private boolean checkCameraPermission() {
         return ContextCompat.checkSelfPermission(
                 this,
@@ -941,6 +994,17 @@ public class MainActivity extends AppCompatActivity {
 
     public StabilizationMode getCurrentRecordStabMode() {
         return nowRecordStabMode.get();
+    }
+
+    @Override
+    protected void onPause() {
+        runOnUiThread(() -> {
+            if (surfaceTexture != null) {
+                surfaceTexture.release(); // 释放GPU资源
+                surfaceTexture = null;
+            }
+        });
+        super.onPause();
     }
 
     @Override
