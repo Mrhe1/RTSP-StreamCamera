@@ -13,7 +13,7 @@ public class YUVConverter {
 
     // 静态缓冲池类
     private static class YUVBufferPool {
-        private static final SoftReference<byte[]>[] bufferPool = new SoftReference[4];
+        private static final SoftReference<byte[]>[] bufferPool = new SoftReference[8];
         private static int currentIndex = 0;
 
         public static synchronized byte[] getBuffer(int requiredSize) {
@@ -47,27 +47,21 @@ public class YUVConverter {
             throw new IllegalArgumentException("无效的平面数量");
         }
 
+        long start = System.nanoTime();
+
         byte[] buffer = YUVBufferPool.getBuffer(calculateSize(image));
         copyImageData(image, buffer);
 
+        long duration = System.nanoTime() - start;
+        Timber.tag(TAG).i("Copy耗时: %.2fms", duration/1e6f);
+
         logImageInfo(image);//only debug use********&&&&&&&&
 
-        return Arrays.copyOf(buffer, calculateExactSize(image));
+        return Arrays.copyOf(buffer, calculateSize(image));
     }
 
     private static int calculateSize(Image image) {
         return image.getWidth() * image.getHeight() * 3 / 2;
-    }
-
-    private static int calculateExactSize(Image image) {
-        int total = 0;
-        for (int i = 0; i < 3; i++) {
-            Image.Plane plane = image.getPlanes()[i];
-            int rowStride = plane.getRowStride();
-            int rows = (i == 0) ? image.getHeight() : image.getHeight() / 2;
-            total += rowStride * rows;
-        }
-        return total;
     }
 
     private static void copyImageData(Image image, byte[] output) {

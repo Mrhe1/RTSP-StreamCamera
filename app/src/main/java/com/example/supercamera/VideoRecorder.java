@@ -5,6 +5,10 @@ import android.media.MediaCodec;
 import android.media.MediaCodecInfo;
 import android.media.MediaFormat;
 import android.media.MediaMuxer;
+import android.view.Surface;
+
+import androidx.annotation.NonNull;
+
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.concurrent.ExecutorService;
@@ -20,16 +24,15 @@ public class VideoRecorder {
     private MediaCodec videoEncoder;
     private MediaMuxer mediaMuxer;
     private int trackIndex;
-    //private boolean isRecording = false;
-    private PublishSubject<byte[]> recordingQueue = PublishSubject.create();
     private Disposable recordingDisposable;
     private static final String TAG = "VideoRecorder";
     public final AtomicBoolean isRecording = new AtomicBoolean(false);
     private final ExecutorService muxerExecutor = Executors.newSingleThreadExecutor();
-    private final MediaCodec.BufferInfo reusableBufferInfo = new MediaCodec.BufferInfo();
     private int width;
     private int height;
     private final Object dimensionLock = new Object();
+    private Surface inputSurface; //Surface成员
+    private long lastPresentationTimeUs = 0;
 
     public void startRecording(String outputPath, int width, int height, int fps, int bitrate) {
         synchronized (dimensionLock) {
@@ -44,13 +47,42 @@ public class VideoRecorder {
                 MediaFormat format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height);
                 format.setInteger(MediaFormat.KEY_BIT_RATE, bitrate * 1000);
                 format.setInteger(MediaFormat.KEY_FRAME_RATE, fps);
-                format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible);
+                format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
                 format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1);//关键帧间隔s
                 format.setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR);//vbr
+                format.setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileHigh);
+                format.setInteger(MediaFormat.KEY_LEVEL, MediaCodecInfo.CodecProfileLevel.AVCLevel52);
 
                 videoEncoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC);
-                videoEncoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
+                inputSurface = videoEncoder.createInputSurface(); //关键Surface获取
                 videoEncoder.start();
+
+                //异步回调
+                videoEncoder.setCallback(new MediaCodec.Callback() {
+                    @Override
+                    public void onInputBufferAvailable(MediaCodec mc, int inputBufferId) {
+                        // Surface模式无需处理输入缓冲区
+                    }
+
+                    @Override
+                    public void onOutputBufferAvailable(MediaCodec mc, int outputBufferId,
+                                                        MediaCodec.BufferInfo bufferInfo) {
+                        // 处理编码后的数据
+                        ByteBuffer outputBuffer = mc.getOutputBuffer(outputBufferId);
+                        mediaMuxer.writeSampleData(trackIndex, outputBuffer, bufferInfo);
+                        mc.releaseOutputBuffer(outputBufferId, false);
+                    }
+
+                    @Override
+                    public void onError(@NonNull MediaCodec codec, @NonNull MediaCodec.CodecException e) {
+
+                    }
+
+                    @Override
+                    public void onOutputFormatChanged(@NonNull MediaCodec codec, @NonNull MediaFormat format) {
+
+                    }
+                });
 
                 // 2. 初始化 MediaMuxer
                 mediaMuxer = new MediaMuxer(outputPath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
@@ -60,7 +92,7 @@ public class VideoRecorder {
                 isRecording.set(true);
 
                 // 3. 启动录制队列
-                startProcessingQueue();
+                //startProcessingQueue();
             } catch (IOException | IllegalStateException e) {
                 Timber.tag(TAG).e(e, "录制初始化失败");
                 cleanupResources();
@@ -69,50 +101,9 @@ public class VideoRecorder {
         }
     }
 
-    private void startProcessingQueue() {
-        Disposable disposable = recordingQueue
-                .toFlowable(BackpressureStrategy.LATEST)
-                .onBackpressureDrop(frame ->
-                        Timber.tag(TAG).w("丢弃帧，当前队列压力过大")
-                )
-                .observeOn(Schedulers.io())
-                .subscribe(frame -> {
-                            if (!isRecording.get()) return;
-                            int expectedSize = width * height * 3 / 2;
-                            if (frame.length < expectedSize) {
-                                Timber.tag(TAG).e("视频帧数据异常: 实际大小=%d，预期大小=%d", frame.length, expectedSize);
-                                return;
-                            }
-
-                            int inputBufferIndex = videoEncoder.dequeueInputBuffer(10000);
-                            if (inputBufferIndex >= 0) {
-                                ByteBuffer inputBuffer = videoEncoder.getInputBuffer(inputBufferIndex); // 直接获取指定缓冲区
-                                inputBuffer.clear();
-                                inputBuffer.put(frame);
-                                videoEncoder.queueInputBuffer(inputBufferIndex, 0, frame.length, System.nanoTime() / 1000, 0);
-                            }
-
-                            // 处理输出
-                            int outputBufferIndex = videoEncoder.dequeueOutputBuffer(reusableBufferInfo, 10000);
-                            while (outputBufferIndex >= 0) {
-                                ByteBuffer outputBuffer = videoEncoder.getOutputBuffer(outputBufferIndex);
-                                MediaCodec.BufferInfo finalBufferInfo = cloneBufferInfo(reusableBufferInfo); // 深拷贝参数
-                                muxerExecutor.execute(() -> {
-                                    try {
-                                        mediaMuxer.writeSampleData(trackIndex, outputBuffer, finalBufferInfo);
-                                    } catch (IllegalStateException e) {
-                                        Timber.e("Muxer写入失败: %s", e.getMessage());
-                                    }
-                                });
-                                videoEncoder.releaseOutputBuffer(outputBufferIndex, false);
-                                outputBufferIndex = videoEncoder.dequeueOutputBuffer(reusableBufferInfo, 0);
-                            }
-                        },
-                        throwable -> {
-                            Timber.e(throwable, "录制队列发生严重错误");
-                            stopRecording();
-                            throw new RuntimeException("录制队列发生严重错误");
-                        });
+    //Surface的方法
+    public Surface getInputSurface() {
+        return inputSurface;
     }
 
     public void stopRecording() {
@@ -126,12 +117,21 @@ public class VideoRecorder {
                     recordingDisposable.dispose();
                 }
 
+                if (inputSurface != null) {
+                    try {
+                        inputSurface.release();
+                        inputSurface = null;
+                    } catch (Exception e) {
+                        Timber.tag(TAG).e("surface释放异常: %s", e.getMessage());
+                    }
+                }
+
                 try {
                     if (videoEncoder != null) {
                         try {
                             videoEncoder.stop();
                         } catch (IllegalStateException e) {
-                            Timber.e("编码器停止异常: %s", e.getMessage());
+                            Timber.tag(TAG).e("编码器停止异常: %s", e.getMessage());
                         }
                         videoEncoder.release();
                     }
@@ -142,34 +142,29 @@ public class VideoRecorder {
                             mediaMuxer.release();
                         }
                     } catch (IllegalStateException e) {
-                        Timber.e("Muxer停止异常: %s", e.getMessage());
+                        Timber.tag(TAG).e("Muxer停止异常: %s", e.getMessage());
                     }
                 }
+                isRecording.set(false);
             }
         }
     }
 
     private void cleanupResources() {
         try {
+            if (inputSurface != null) {
+                inputSurface.release();
+                inputSurface = null;
+            }
             if (videoEncoder != null) {
                 videoEncoder.release();
             }
             if (mediaMuxer != null) {
                 mediaMuxer.release();
             }
+            isRecording.set(false);
         } catch (Exception e) {
             Timber.tag(TAG).e(e, "资源清理失败");
         }
-    }
-
-    private MediaCodec.BufferInfo cloneBufferInfo(MediaCodec.BufferInfo source) {
-        MediaCodec.BufferInfo clone = new MediaCodec.BufferInfo();
-        clone.set(source.offset, source.size, source.presentationTimeUs, source.flags);
-        return clone;
-    }
-
-
-    public PublishSubject<byte[]> getRecordingQueue() {
-        return recordingQueue;
     }
 }

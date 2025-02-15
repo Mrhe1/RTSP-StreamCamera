@@ -22,6 +22,9 @@ import androidx.camera.core.CameraSelector;
 import androidx.camera.core.ImageAnalysis;
 import androidx.camera.core.Preview;
 import androidx.camera.lifecycle.ProcessCameraProvider;
+import androidx.camera.video.Recorder;
+import androidx.camera.video.Recording;
+import androidx.camera.video.VideoCapture;
 import androidx.camera.view.PreviewView;
 import androidx.camera.camera2.interop.Camera2Interop;
 import androidx.core.app.ActivityCompat;
@@ -35,6 +38,8 @@ import java.util.concurrent.ExecutionException;
 import io.reactivex.rxjava3.disposables.CompositeDisposable;
 import io.reactivex.rxjava3.disposables.Disposable;
 import timber.log.Timber;
+
+import android.view.Surface;
 import android.view.View;
 import java.io.File;
 import java.text.SimpleDateFormat;
@@ -101,7 +106,9 @@ public class MainActivity extends AppCompatActivity {
     private final CameraSelector cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA;
     private CompositeDisposable compositeDisposable;
     private final ExecutorService StreamanalysisExecutor = Executors.newSingleThreadExecutor();
-    private final ExecutorService RecordanalysisExecutor = Executors.newSingleThreadExecutor();
+    private  ExecutorService RecordanalysisExecutor = Executors.newSingleThreadExecutor();
+    private VideoCapture<Recorder> videoCapture;
+    private Recording activeRecording;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -630,12 +637,12 @@ public class MainActivity extends AppCompatActivity {
                     try {
                         if (videoRecorder == null || !videoRecorder.isRecording.get()) {
                             setState(WorkflowState.ERROR);
-                            // 释放锁后再执行停止操作
+                            //异步停止操作
                             new Handler(Looper.getMainLooper()).post(() -> Stop());
                             return;
                         }
                         byte[] yuvData = YUVConverter.convertYUV420888ToYUV420P(highResImage);
-                        videoRecorder.getRecordingQueue().onNext(yuvData);
+                        //videoRecorder.getRecordingQueue().onNext(yuvData);
                     } catch (IllegalArgumentException e) {
                         Timber.tag(TAGCamera).e(e, "录制：Image format error");
                     } finally {
@@ -644,13 +651,13 @@ public class MainActivity extends AppCompatActivity {
                 });
 
                 // ========== 绑定用例 ==========
-                CameraSelector cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA;
                 cameraProvider.bindToLifecycle(
                         this,
                         cameraSelector,
                         preview,
                         streamingAnalysis,
-                        recordingAnalysis
+                        //recordingAnalysis,
+                        videoCapture
                 );
 
                 Now_Push_fps.set(push_fps_Range.getUpper());
