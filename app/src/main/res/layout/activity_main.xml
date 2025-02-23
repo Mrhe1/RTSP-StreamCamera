@@ -5,20 +5,20 @@
     android:layout_height="match_parent">
 
     <!-- 摄像头预览视图 -->
-    <TextureView
-        android:id="@+id/textureView"
+    <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:visibility="gone"/> <!-- 初始状态隐藏 -->
+        android:background="@android:color/black">
+
+        <TextureView
+            android:id="@+id/textureView"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:layout_gravity="center"/>
+    </FrameLayout>
+
 
     <!-- 按钮控制栏 -->
-    <androidx.camera.view.PreviewView
-        android:id="@+id/previewView"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:clickable="false"/>
-        <!-- android:visibility="invisible" -->
-
     <LinearLayout
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"

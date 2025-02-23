@@ -15,6 +15,8 @@ import com.alivc.live.pusher.AlivcLivePushError;
 import com.alivc.live.pusher.AlivcImageFormat;
 import com.alivc.live.pusher.AlivcLivePushStatsInfo;
 import com.alivc.live.pusher.AlivcVideoEncodeGopEnum;
+
+import io.reactivex.rxjava3.core.BackpressureOverflowStrategy;
 import io.reactivex.rxjava3.core.Observable;
 import io.reactivex.rxjava3.disposables.Disposable;
 import io.reactivex.rxjava3.subjects.PublishSubject;
@@ -371,10 +373,10 @@ public class VideoPusher {
 
     private void startStreamingQueue() {
         Disposable disposable = streamingQueue
-                .toFlowable(BackpressureStrategy.LATEST)
-                .onBackpressureDrop(frame ->
-                        Timber.tag(TAG).w("丢弃帧，当前队列压力过大")
-                )
+                .toFlowable(BackpressureStrategy.BUFFER)
+                .onBackpressureBuffer(5, // 保持5帧缓冲
+                        () -> Timber.w("帧队列已满，开始丢弃"),
+                        BackpressureOverflowStrategy.DROP_OLDEST)
                 // 使用计算线程池
                 .observeOn(Schedulers.computation())
                 .subscribe(frame -> {

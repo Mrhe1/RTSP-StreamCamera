@@ -99,20 +99,25 @@ public class YUVConverter {
         ByteBuffer buffer = plane.getBuffer();
         buffer.rewind();
 
+        // 修复1：正确计算每行有效数据长度
+        int bytesPerPixel = (pixelStride == 2 && (plane.getPixelStride() == 2)) ? 2 : 1; // 兼容YUV422情况
+        int validRowLength = width * bytesPerPixel;
+
+        // 修复2：使用安全拷贝方式
         if (pixelStride == 1 && rowStride == width) {
-            // 快速路径：直接拷贝
             buffer.get(output, offset, width * height);
         } else {
-            // 带跨度的逐行拷贝
-            byte[] rowBuffer = new byte[rowStride];
+            byte[] rowBuffer = new byte[rowStride]; // 使用实际行跨度
             for (int y = 0; y < height; y++) {
-                buffer.get(rowBuffer, 0, rowStride);
-                for (int x = 0; x < width; x++) {
-                    output[offset + y * width + x] = rowBuffer[x * pixelStride];
+                buffer.get(rowBuffer, 0, Math.min(rowStride, buffer.remaining()));
+                for (int x = 0; x < validRowLength; x += pixelStride) { // 按实际像素步长拷贝
+                    if ((offset + y * width + (x / pixelStride)) >= output.length) break;
+                    output[offset + y * width + (x / pixelStride)] = rowBuffer[x];
                 }
             }
         }
     }
+
 
     /**
      * 打印图像信息（用于调试）

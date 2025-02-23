@@ -11,6 +11,7 @@ import android.hardware.camera2.CameraDevice;
 import android.hardware.camera2.CameraManager;
 import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.params.StreamConfigurationMap;
+import android.media.Image;
 import android.media.ImageReader;
 import android.os.Bundle;
 import android.os.Handler;
@@ -52,6 +53,7 @@ import android.Manifest;
 import android.widget.Button;
 import android.util.Range;
 import android.widget.FrameLayout;
+import android.widget.RelativeLayout;
 
 /////////////////////////////////////////////注意要求push与record帧率一致！！！！#####
 public class MainActivity extends AppCompatActivity {
@@ -121,7 +123,9 @@ public class MainActivity extends AppCompatActivity {
     private volatile boolean isSurfaceAvailable = false;
     private final Object surfaceLock = new Object();
     private Surface previewSurface = null;
-
+    private HandlerThread streamingHandlerThread;
+    private Handler streamingHandler;
+    private ImageReader streamingReader;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -144,6 +148,14 @@ public class MainActivity extends AppCompatActivity {
         // 设置按钮点击监听
         btnStart.setOnClickListener(v -> handleStart());
         btnStop.setOnClickListener(v -> handleStop());
+
+        textureView = findViewById(R.id.textureView);
+        textureView.setVisibility(View.VISIBLE); // 立即可见
+        textureView.setSurfaceTextureListener(surfaceTextureListener);
+
+        streamingHandlerThread = new HandlerThread("StreamingImageProcessor");
+        streamingHandlerThread.start();
+        streamingHandler = new Handler(streamingHandlerThread.getLooper());
 
         // 初始化按钮状态
         updateButtonState();
@@ -186,8 +198,8 @@ public class MainActivity extends AppCompatActivity {
         int push_initMinBitrate = 1000;
         StabilizationMode push_StabilizationMode = StabilizationMode.OIS_ONLY;//防抖
         StabilizationMode record_StabilizationMode = StabilizationMode.HYBRID;
-        int record_width = 1920;
-        int record_height = 1080;
+        int record_width = 2560;
+        int record_height = 1440;
         int record_bitrate = 10000;//单位kbps
         int record_fps =30;
         String push_Url = ""; // WebRTC 推流地址，可为空？？？
@@ -387,15 +399,16 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
     // 等待Surface准备方法
     private void waitForSurfaceReady() {
         synchronized (surfaceLock) {
-            if (!isSurfaceAvailable) {
+            long endTime = System.currentTimeMillis() + 3000;
+            while (!isSurfaceAvailable && System.currentTimeMillis() < endTime) {
                 try {
-                    surfaceLock.wait(3000); // 最多等待3秒
-                    if (!isSurfaceAvailable) {
-                        throw new RuntimeException("Surface准备超时");
-                    }
+                    surfaceLock.wait(endTime - System.currentTimeMillis());
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                 }
+            }
+            if (!isSurfaceAvailable) {
+                throw new RuntimeException("Surface准备超时");
             }
         }
     }
@@ -501,6 +514,12 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
             return;
         }
 
+        // 检查 textureView 是否已被释放
+        if (textureView == null) {
+            textureView = findViewById(R.id.textureView);
+            textureView.setSurfaceTextureListener(surfaceTextureListener);
+        }
+
         // 初始化摄像头线程
         HandlerThread cameraThread = new HandlerThread("CameraBackground");
         cameraThread.start();
@@ -576,15 +595,39 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
                     handleCameraError(ERROR_CAMERA_DEVICE);
                     return;
                 }
+
                 surfaceTexture.setDefaultBufferSize(pushWidth, pushHeight);
                 previewSurface = new Surface(surfaceTexture);
                 surfaces.add(previewSurface);
             }
 
             // 推流Surface (ImageReader)
-            ImageReader streamingReader = ImageReader.newInstance(
+             streamingReader = ImageReader.newInstance(
                     pushWidth, pushHeight, ImageFormat.YUV_420_888, 3);
             surfaces.add(streamingReader.getSurface());
+
+            // 设置图像可用监听器
+            streamingReader.setOnImageAvailableListener(reader -> {
+                if (!videoRecorder.isRecording.get()) { // 增加状态检查
+                    reader.close();
+                    return;
+                }
+                try (Image image = reader.acquireLatestImage()) { // 使用try-with-resources确保自动关闭
+                    if (image != null && videoPusher != null) {
+                        try {
+                            byte[] yuvData = YUVConverter.convertYUV420888ToYUV420P(image);
+                            if (yuvData != null) { // 添加空校验
+                                videoPusher.getStreamingQueue().onNext(yuvData);
+                            }
+                        } catch (IllegalArgumentException e) {
+                            Timber.tag(TAGCamera).e(e, "帧格式转换出错");
+                        }
+                    }
+                } catch (Exception e) {
+                    Timber.tag(TAGCamera).e(e, "图像处理异常");
+                }
+            }, streamingHandler);
+
 
             // 录制Surface
             try {
@@ -619,6 +662,11 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
 
             // 预览显示逻辑
             textureView.post(() -> {
+                if (textureView == null) { // 新增空检查
+                    Timber.tag(TAGCamera).e("TextureView 已被释放，无法调整预览");
+                    return;
+                }
+
                 // 设置合适的宽高比
                 int viewWidth = textureView.getWidth();
                 int viewHeight = textureView.getHeight();
@@ -765,13 +813,13 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
         try {
             runOnUiThread(() -> {
                 if (textureView != null) {
-                    textureView.setVisibility(View.GONE);
-                    textureView = null;
+                    textureView.setVisibility(View.GONE); // 仅隐藏，不置空
                 }
             });
 
             // 统一释放所有资源
             if (cameraCaptureSession != null) {
+                cameraCaptureSession.abortCaptures(); // 立即终止未完成请求
                 cameraCaptureSession.close();
                 cameraCaptureSession = null;
             }
@@ -781,6 +829,15 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
             }
             if (cameraHandler != null) {
                 cameraHandler.getLooper().quitSafely();
+            }
+            if (streamingHandlerThread != null) {
+                streamingHandlerThread.quitSafely();
+                streamingHandlerThread = null;
+                streamingHandler = null;
+            }
+            if (streamingReader != null) {
+                streamingReader.close();
+                streamingReader = null;
             }
         }
         catch (Exception e) {
@@ -985,13 +1042,16 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
 
     @Override
     protected void onPause() {
-        runOnUiThread(() -> {
-            if (surfaceTexture != null) {
-                surfaceTexture.release(); // 释放GPU资源
-                surfaceTexture = null;
-            }
-        });
         super.onPause();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (textureView != null) {
+            surfaceTexture = textureView.getSurfaceTexture();
+            isSurfaceAvailable = (surfaceTexture != null);
+        }
     }
 
     @Override
