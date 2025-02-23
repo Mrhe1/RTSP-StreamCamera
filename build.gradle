@@ -16,9 +16,10 @@ plugins {
 }
 
 allprojects {
-    //repositories {
-        //maven { url "https://maven.aliyun.com/nexus/content/repositories/releases" }
-        //google()
-        //mavenCentral()
-    //}
+    configurations.all {
+        resolutionStrategy {
+            force 'androidx.annotation:annotation-jvm:1.9.1'
+            force 'androidx.annotation:annotation:1.9.0'
+        }
+    }
 }

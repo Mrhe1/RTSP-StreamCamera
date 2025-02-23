@@ -165,7 +165,7 @@ public class MainActivity extends AppCompatActivity {
         // 实现状态转换规则校验
         WorkflowState current = currentState.get();
         switch (current) {
-            case IDLE: return newState == WorkflowState.STARTING;
+            case IDLE: return newState == WorkflowState.READY;
             case READY: return newState == WorkflowState.STARTING;
             case STARTING: return newState == WorkflowState.WORKING || newState == WorkflowState.ERROR;
             case WORKING: return newState == WorkflowState.STOPPING || newState == WorkflowState.ERROR;
@@ -186,11 +186,11 @@ public class MainActivity extends AppCompatActivity {
         int push_initMinBitrate = 1000;
         StabilizationMode push_StabilizationMode = StabilizationMode.OIS_ONLY;//防抖
         StabilizationMode record_StabilizationMode = StabilizationMode.HYBRID;
-        int record_width = 3840;
-        int record_height = 2560;
+        int record_width = 1920;
+        int record_height = 1080;
         int record_bitrate = 10000;//单位kbps
         int record_fps =30;
-        String push_Url = "artc://example.com/live/stream"; // WebRTC 推流地址，可为空？？？
+        String push_Url = ""; // WebRTC 推流地址，可为空？？？
 
         if(currentState.get() != WorkflowState.READY)
         {
@@ -205,7 +205,7 @@ public class MainActivity extends AppCompatActivity {
                 record_width, record_height, record_bitrate, record_fps,
                 push_StabilizationMode, record_StabilizationMode) == 0)
         {
-            Timber.tag(TAG).e("工作流开始成功");
+            Timber.tag(TAG).i("工作流开始成功");
         }
         else{
             Timber.tag(TAG).e("工作流开始失败");
@@ -279,7 +279,7 @@ public class MainActivity extends AppCompatActivity {
                 return 4;
             }
 
-            Timber.tag(TAG).e("正在开启工作流");
+            Timber.tag(TAG).i("正在开启工作流");
             try {
                 // 2. 初始化推流服务
                 try {
@@ -683,30 +683,17 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
                     m -> m == CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON);
 
             // OIS全局配置（任一模式请求即开启）
-            boolean enableOIS = pushMode == StabilizationMode.OIS_ONLY ||
+            boolean enableOIS = (pushMode == StabilizationMode.OIS_ONLY ||
                     pushMode == StabilizationMode.HYBRID ||
-                    recordMode == StabilizationMode.OIS_ONLY ||
-                    recordMode == StabilizationMode.HYBRID;
-            if(enableOIS && oisSupported)
-            {
-                enableOIS = true;
-            }
-            else{
-                enableOIS = false;
-            }
+                    recordMode == StabilizationMode.OIS_ONLY
+                    || recordMode == StabilizationMode.HYBRID) && oisSupported;
 
-            // OIS全局配置（任一模式请求即开启）
-            boolean enableEIS = pushMode == StabilizationMode.EIS_ONLY ||
+
+            // EIS全局配置（任一模式请求即开启）
+            boolean enableEIS = (pushMode == StabilizationMode.EIS_ONLY ||
                     pushMode == StabilizationMode.HYBRID ||
-                    recordMode == StabilizationMode.EIS_ONLY ||
-                    recordMode == StabilizationMode.HYBRID;
-            if(enableEIS ==true && eisSupported)
-            {
-                enableEIS = true;
-            }
-            else{
-                enableEIS = false;
-            }
+                    recordMode == StabilizationMode.EIS_ONLY
+                    || recordMode == StabilizationMode.HYBRID) && eisSupported;
 
             // 应用配置
             applyStabilization(builder, enableOIS , enableEIS);
@@ -1015,6 +1002,9 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
         //释放RxJava资源
         if (compositeDisposable != null && !compositeDisposable.isDisposed()) {
             compositeDisposable.dispose();
+        }
+        if (cameraProvider != null) {
+            cameraProvider.unbindAll();
         }
         super.onDestroy();
     }

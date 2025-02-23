@@ -34,9 +34,12 @@ public class VideoRecorder {
     private Surface inputSurface; //Surface成员
     private long lastPresentationTimeUs = 0;
     //private final AtomicBoolean isSurfaceReady = new AtomicBoolean(false);
+    private final ExecutorService encoderExecutor = Executors.newSingleThreadExecutor();
+    private final AtomicBoolean isInitializing = new AtomicBoolean(false);
 
     public void startRecording(int width, int height, int fps, int bitrate, String outputPath) {
-        synchronized (dimensionLock) {
+        if (isInitializing.get()) return;
+        isInitializing.set(true);
             if (isRecording.get()) {
                 throw new RuntimeException("已经开始录制，无法重复开启");
             }
@@ -45,75 +48,143 @@ public class VideoRecorder {
                 this.width = width;
                 this.height = height;
 
+                // 2. 初始化 MediaMuxer
+                try {
+                    mediaMuxer = new MediaMuxer(outputPath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
+                }
+                catch (Exception e)
+                {
+                    Timber.tag(TAG).e(e.getMessage());
+                }
                 // 1. 提前初始化编码器（H.264）
-                MediaFormat format = MediaFormat.createVideoFormat(
-                        MediaFormat.MIMETYPE_VIDEO_AVC, width, height
-                );
-                format.setInteger(MediaFormat.KEY_BIT_RATE, bitrate * 1000);
-                format.setInteger(MediaFormat.KEY_FRAME_RATE, fps);
-                format.setInteger(MediaFormat.KEY_COLOR_FORMAT,
-                        MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
-                format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1);
+                try {
 
-                videoEncoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC);
-                videoEncoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
+                    MediaFormat format = MediaFormat.createVideoFormat(
+                            MediaFormat.MIMETYPE_VIDEO_AVC, width, height
+                    );
+                    format.setInteger(MediaFormat.KEY_BIT_RATE, bitrate * 1000);
+                    format.setInteger(MediaFormat.KEY_FRAME_RATE, fps);
+                    //format.setInteger(MediaFormat.KEY_COLOR_FORMAT,
+                    //MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
+                    format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1);
 
-                // 2. 提前创建 Surface
-                inputSurface = videoEncoder.createInputSurface();
-                videoEncoder.start(); // 启动编码器但不立即开始录制
+                    // MTK芯片需要特殊参数
+                    format.setInteger("vendor.mediatek.videoenc.force-venc-profile",
+                            MediaCodecInfo.CodecProfileLevel.AVCProfileHigh);
+                    format.setInteger("vendor.mediatek.feature.tile-encoding", 1); // 启用Tile编码
+                    format.setInteger("vendor.mediatek.videoenc.tile-dimension-columns", 4);
+                    format.setInteger("vendor.mediatek.videoenc.tile-dimension-rows", 2);
+
+                    // 替换颜色格式
+                    format.setInteger(MediaFormat.KEY_COLOR_FORMAT,
+                            MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible);
+
+                    // 添加数据空间定义
+                    format.setInteger(MediaFormat.KEY_COLOR_STANDARD,
+                            MediaFormat.COLOR_STANDARD_BT709);
+                    format.setInteger(MediaFormat.KEY_COLOR_RANGE,
+                            MediaFormat.COLOR_RANGE_LIMITED);
+                    format.setInteger(MediaFormat.KEY_COLOR_TRANSFER,
+                            MediaFormat.COLOR_TRANSFER_SDR_VIDEO);
+
+
+                    videoEncoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC);
+                    videoEncoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
+                } catch (Exception e) {
+                    Timber.tag(TAG).e(e.getMessage());
+                }
 
                 Timber.tag(TAG).d("编码器 Surface 已准备");
 
                 //异步回调
-                videoEncoder.setCallback(new MediaCodec.Callback() {
-                    private volatile boolean muxerStarted = false;
-                    @Override
-                    public void onInputBufferAvailable(MediaCodec mc, int inputBufferId) {
-                        // Surface模式无需处理输入缓冲区
-                    }
+                try {
+                    videoEncoder.setCallback(new MediaCodec.Callback() {
+                        private volatile boolean muxerStarted = false;
 
-                    @Override
-                    public void onOutputBufferAvailable(MediaCodec mc, int outputBufferId,
-                                                        MediaCodec.BufferInfo bufferInfo) {
-                        // 处理编码后的数据
-                        ByteBuffer outputBuffer = mc.getOutputBuffer(outputBufferId);
-
-                        if (bufferInfo.presentationTimeUs <= lastPresentationTimeUs) {
-                            bufferInfo.presentationTimeUs = lastPresentationTimeUs + 1000000 / fps;
+                        @Override
+                        public void onInputBufferAvailable(MediaCodec mc, int inputBufferId) {
+                            // Surface模式无需处理输入缓冲区
                         }
-                        lastPresentationTimeUs = bufferInfo.presentationTimeUs;
 
-                        mediaMuxer.writeSampleData(trackIndex, outputBuffer, bufferInfo);
-                        mc.releaseOutputBuffer(outputBufferId, false);
-                    }
+                        @Override
+                        public void onOutputBufferAvailable(MediaCodec mc, int outputBufferId,
+                                                            MediaCodec.BufferInfo bufferInfo) {
+                            synchronized (dimensionLock) {
+                                if (mediaMuxer == null || !muxerStarted) return;
 
-                    @Override
-                    public void onError(@NonNull MediaCodec codec, @NonNull MediaCodec.CodecException e) {
+                                // 获取实际的 ByteBuffer
+                                ByteBuffer outputBuffer = mc.getOutputBuffer(outputBufferId);
+                                if (outputBuffer == null) {
+                                    Timber.tag(TAG).w("获取输出缓冲区失败");
+                                    mc.releaseOutputBuffer(outputBufferId, false);
+                                    return;
+                                }
 
-                    }
+                                // 忽略配置数据（如 SPS/PPS）
+                                if ((bufferInfo.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
+                                    mc.releaseOutputBuffer(outputBufferId, false);
+                                    return;
+                                }
 
-                    @Override
-                    public void onOutputFormatChanged(@NonNull MediaCodec codec, @NonNull MediaFormat format) {
-                        if (muxerStarted) return;
-                        trackIndex = mediaMuxer.addTrack(format);
-                        mediaMuxer.start();
-                        muxerStarted = true;
-                    }
-                });
+                                try {
+                                    // 时间戳修正
+                                    if (bufferInfo.presentationTimeUs <= lastPresentationTimeUs) {
+                                        bufferInfo.presentationTimeUs = lastPresentationTimeUs + 1000000 / fps;
+                                    }
+                                    lastPresentationTimeUs = bufferInfo.presentationTimeUs;
 
-                // 2. 初始化 MediaMuxer
-                mediaMuxer = new MediaMuxer(outputPath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
+                                    mediaMuxer.writeSampleData(trackIndex, outputBuffer, bufferInfo);
+                                } catch (Exception e) {
+                                    Timber.tag(TAG).e("写入数据失败: %s", e.getMessage());
+                                } finally {
+                                    mc.releaseOutputBuffer(outputBufferId, false);
+                                }
+                            }
+                        }
+
+
+                        @Override
+                        public void onError(@NonNull MediaCodec codec, @NonNull MediaCodec.CodecException e) {
+
+                        }
+
+                        @Override
+                        public void onOutputFormatChanged(@NonNull MediaCodec codec, @NonNull MediaFormat format) {
+                            if (mediaMuxer == null || muxerStarted) return;
+
+                            // 确保格式有效
+                            if (!format.containsKey(MediaFormat.KEY_MIME)) {
+                                Timber.tag(TAG).e("无效的媒体格式");
+                                return;
+                            }
+
+                            trackIndex = mediaMuxer.addTrack(format);
+                            mediaMuxer.start();
+                            muxerStarted = true;
+                            Timber.tag(TAG).d("Muxer 启动完成");
+                        }
+                    });
+                } catch (Exception e) {
+                    Timber.tag(TAG).e(e.getMessage());
+                }
+
+                // 2. 提前创建 Surface
+                try {
+                    inputSurface = videoEncoder.createInputSurface();
+                    videoEncoder.start(); // 启动编码器但不立即开始录制
+                } catch (Exception e) {
+                    Timber.tag(TAG).e(e.getMessage());
+                }
 
                 isRecording.set(true);
 
                 // 3. 启动录制队列
                 //startProcessingQueue();
-            } catch (IOException | IllegalStateException e) {
+            } catch (Exception e) {
                 Timber.tag(TAG).e(e, "录制初始化失败");
                 cleanupResources();
                 throw new RuntimeException("录制初始化失败");
             }
-        }
     }
 
 
@@ -132,43 +203,75 @@ public class VideoRecorder {
 
     public void stopRecording() {
         synchronized (dimensionLock) {
-            this.width = 0;
-            this.height = 0;
+            if (!isRecording.get()) return;
 
-            if (isRecording.get()) {
+            try {
+                // 1. 发送编码结束信号（仅Surface模式需要）
                 if (videoEncoder != null) {
-                    videoEncoder.signalEndOfInputStream(); // 针对Surface模式
+                    videoEncoder.signalEndOfInputStream();
+                }
+
+                // 2. 直接停止编码器
+                if (videoEncoder != null) {
                     videoEncoder.stop();
                 }
 
+                // 3. 停止并释放Muxer
                 if (mediaMuxer != null) {
                     mediaMuxer.stop();
+                    mediaMuxer.release();
+                    mediaMuxer = null;
                 }
-
-                // 最后释放Surface
+            } catch (Exception e) {
+                Timber.e("停止录制出错: %s", e.getMessage());
+            } finally {
+                // 4. 强制释放所有资源
+                if (videoEncoder != null) {
+                    videoEncoder.release();
+                    videoEncoder = null;
+                }
                 if (inputSurface != null) {
                     inputSurface.release();
+                    inputSurface = null;
                 }
                 isRecording.set(false);
             }
         }
     }
 
+
     private void cleanupResources() {
-        try {
-            if (inputSurface != null) {
-                inputSurface.release();
-                inputSurface = null;
+        synchronized (dimensionLock) {
+            try {
+                // 先停止编码器
+                if (videoEncoder != null) {
+                    videoEncoder.stop();
+                    videoEncoder.release();
+                    videoEncoder = null;
+                }
+
+                // 再停止 Muxer
+                if (mediaMuxer != null) {
+                    try {
+                        if (isRecording.get()) {
+                            mediaMuxer.stop();
+                        }
+                    } catch (IllegalStateException e) {
+                        Timber.tag(TAG).w("Muxer 停止异常: %s", e.getMessage());
+                    }
+                    mediaMuxer.release();
+                    mediaMuxer = null;
+                }
+
+                // 最后释放 Surface
+                if (inputSurface != null) {
+                    inputSurface.release();
+                    inputSurface = null;
+                }
+            } catch (Exception e) {
+                Timber.tag(TAG).e(e, "资源清理异常");
             }
-            if (videoEncoder != null) {
-                videoEncoder.release();
-            }
-            if (mediaMuxer != null) {
-                mediaMuxer.release();
-            }
-            isRecording.set(false);
-        } catch (Exception e) {
-            Timber.tag(TAG).e(e, "资源清理失败");
         }
     }
+
 }
