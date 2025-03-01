@@ -47,15 +47,15 @@ public class YUVConverter {
             throw new IllegalArgumentException("无效的平面数量");
         }
 
-        long start = System.nanoTime();
+        //long start = System.nanoTime();
 
         byte[] buffer = YUVBufferPool.getBuffer(calculateSize(image));
         copyImageData(image, buffer);
 
-        long duration = System.nanoTime() - start;
-        Timber.tag(TAG).i("Copy耗时: %.2fms", duration/1e6f);
+        //long duration = System.nanoTime() - start;
+        //Timber.tag(TAG).i("Copy耗时: %.2fms", duration/1e6f);
 
-        logImageInfo(image);//only debug use********&&&&&&&&
+        //logImageInfo(image);//only debug use********&&&&&&&&
 
         return Arrays.copyOf(buffer, calculateSize(image));
     }
@@ -99,11 +99,11 @@ public class YUVConverter {
         ByteBuffer buffer = plane.getBuffer();
         buffer.rewind();
 
-        // 修复1：正确计算每行有效数据长度
+        // 计算每行有效数据长度
         int bytesPerPixel = (pixelStride == 2 && (plane.getPixelStride() == 2)) ? 2 : 1; // 兼容YUV422情况
         int validRowLength = width * bytesPerPixel;
 
-        // 修复2：使用安全拷贝方式
+        // 使用安全拷贝方式
         if (pixelStride == 1 && rowStride == width) {
             buffer.get(output, offset, width * height);
         } else {

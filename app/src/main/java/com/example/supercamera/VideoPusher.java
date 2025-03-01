@@ -43,7 +43,6 @@ public class VideoPusher {
     private final int rotation;
     private static final int MAX_RECONNECT_ATTEMPTS = 5;
     private long mStartTimeNs = System.nanoTime();
-    //private String pushUrl;
     private Disposable reconnectDisposable;
     private final CompositeDisposable compositeDisposable = new CompositeDisposable();
     private volatile boolean isReconnecting = false;
@@ -184,8 +183,8 @@ public class VideoPusher {
             @Override
             public void onConnectFail(AlivcLivePusher pusher) {
                 Timber.tag(TAG).e("推流器连接失败");
-                reportSubject.onNext(new PushReport(EventType.ERROR, 0, "连接失败", 0, 0, 0));
                 stopPush();
+                reportSubject.onNext(new PushReport(EventType.ERROR, 0, "连接失败", 0, 0, 0));
                 throw new RuntimeException("推流器连接失败"); // 抛出致命错误
             }
             @Override public void onReconnectStart(AlivcLivePusher pusher) {
@@ -233,8 +232,8 @@ public class VideoPusher {
                     String errorMsg = error.getMsg();
                     Timber.tag(TAG).e("推流系统错误: %d %s", errorCode,errorMsg);
                     String errorMessage = String.format("推流错误: %d %s", errorCode, errorMsg);
-                    reportSubject.onNext(new PushReport(EventType.ERROR, errorCode, errorMessage, 0, 0, 0));
                     stopPush();
+                    reportSubject.onNext(new PushReport(EventType.ERROR, errorCode, errorMessage, 0, 0, 0));
                     throw new RuntimeException(errorMessage); // 抛出致命错误
                 }
             }
@@ -246,8 +245,8 @@ public class VideoPusher {
                     String errorMsg = error.getMsg();
                     Timber.tag(TAG).e("推流系统错误: %d %s", errorCode,errorMsg);
                     String errorMessage = String.format("推流错误: %d %s", errorCode, errorMsg);
-                    reportSubject.onNext(new PushReport(EventType.ERROR, errorCode, errorMessage, 0, 0, 0));
                     stopPush();
+                    reportSubject.onNext(new PushReport(EventType.ERROR, errorCode, errorMessage, 0, 0, 0));
                     throw new RuntimeException(errorMessage); // 抛出致命错误
                 }
             }
@@ -501,28 +500,16 @@ public class VideoPusher {
 
     public void startPush(String pushUrl) {
         if (livePusher != null) {//如果url为空则get url
-            if (pushUrl == null)
+            if (pushUrl == null || pushUrl.isEmpty())
             {
-                pushUrl = livePusher.getPushUrl();
+                stopPush();
+                reportSubject.onNext(new PushReport(EventType.ERROR, 0, "url为空", 0, 0, 0));
+                throw new RuntimeException("开始推流失败，url为空");
             }
             mPushUrlRef.set(pushUrl);
-            //livePusher.startPreview(mSurfaceView);
-            try {
-                livePusher.startPush(pushUrl);
-                Timber.tag(TAG).i("开始推流: %s", pushUrl);
-            } catch (IllegalArgumentException e) {
-                String errorMessage = String.format("url为空，或者不是有效的url格式:%s", e);
-                Timber.tag(TAG).e(errorMessage);
-                reportSubject.onNext(new PushReport(EventType.ERROR, 0, errorMessage, 0, 0, 0));
-                stopPush();
-                throw new RuntimeException("开始推流失败，url为空，或者不是有效的url格式：",e);
-            } catch (IllegalStateException e) {
-                stopPush();
-                String errorMessage = String.format("开始推流失败，状态不对:%s", e);
-                Timber.tag(TAG).e(errorMessage);
-                reportSubject.onNext(new PushReport(EventType.ERROR, 0, errorMessage, 0, 0, 0));
-                throw new RuntimeException("开始推流失败，状态不对：",e);
-            }
+
+            livePusher.startPush(pushUrl);
+            //Timber.tag(TAG).i("开始推流: %s", pushUrl);
         }
     }
 

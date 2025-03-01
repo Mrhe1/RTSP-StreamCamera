@@ -14,6 +14,7 @@ import android.hardware.camera2.params.StreamConfigurationMap;
 import android.media.Image;
 import android.media.ImageReader;
 import android.os.Bundle;
+import android.os.Environment;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Looper;
@@ -23,10 +24,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
-import androidx.camera.core.CameraSelector;
-import androidx.camera.core.ImageAnalysis;
-import androidx.camera.core.Preview;
-import androidx.camera.lifecycle.ProcessCameraProvider;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 import io.reactivex.rxjava3.android.schedulers.AndroidSchedulers;
@@ -36,24 +33,28 @@ import java.util.Set;
 import io.reactivex.rxjava3.disposables.CompositeDisposable;
 import io.reactivex.rxjava3.disposables.Disposable;
 import timber.log.Timber;
+
+import android.view.Gravity;
 import android.view.Surface;
 import android.view.TextureView;
 import android.view.View;
 import java.io.File;
 import java.text.SimpleDateFormat;
 import java.util.Locale;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.Date;
 import android.Manifest;
+import android.view.ViewGroup;
 import android.widget.Button;
 import android.util.Range;
 import android.widget.FrameLayout;
-import android.widget.RelativeLayout;
 
 /////////////////////////////////////////////注意要求push与record帧率一致！！！！#####
 public class MainActivity extends AppCompatActivity {
@@ -65,6 +66,7 @@ public class MainActivity extends AppCompatActivity {
         HYBRID      // 混合模式（OIS+EIS）
     }
 
+    public final onStartedCheck checker = new onStartedCheck();
     private final AtomicReference<StabilizationMode> nowPushStabMode =
             new AtomicReference<>(StabilizationMode.OFF);
     private final AtomicReference<StabilizationMode> nowRecordStabMode =
@@ -81,7 +83,7 @@ public class MainActivity extends AppCompatActivity {
         ERROR          //出错
     }
 
-    private final AtomicReference<WorkflowState> currentState =
+    private static final AtomicReference<WorkflowState> currentState =
             new AtomicReference<>(WorkflowState.IDLE);
 
     private VideoPusher videoPusher;
@@ -92,21 +94,11 @@ public class MainActivity extends AppCompatActivity {
     private final Object startStopLock = new Object();
     private final Object checkPermissionLock = new Object();
     private volatile boolean ispermitted = false;
-    //摄像头控制相关变量
-    private ProcessCameraProvider cameraProvider;
-    private ImageAnalysis streamingAnalysis;
-    private ImageAnalysis recordingAnalysis;
-    private Preview preview;
     private static final int CAMERA_PERMISSION_REQUEST_CODE = 100;
     //按钮变量
     private Button btnStart;
     private Button btnStop;
-    private final CameraSelector cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA;
     private CompositeDisposable compositeDisposable;
-    private final ExecutorService StreamanalysisExecutor = Executors.newSingleThreadExecutor();
-    private  ExecutorService RecordanalysisExecutor = Executors.newSingleThreadExecutor();
-    //private VideoCapture<Recorder> videoCapture;
-    //private Recording activeRecording;
     private CameraDevice cameraDevice;
     private CameraCaptureSession cameraCaptureSession;
     private Handler cameraHandler;
@@ -126,6 +118,106 @@ public class MainActivity extends AppCompatActivity {
     private HandlerThread streamingHandlerThread;
     private Handler streamingHandler;
     private ImageReader streamingReader;
+
+    public class onStartedCheck{
+        private AtomicIntegerArray isStarted = new AtomicIntegerArray(3);
+        private static final int TIMEOUT_MILLISECONDS = 8500;
+        private ScheduledExecutorService timeoutScheduler;
+        public enum StartPart {
+            CAMERA(0),
+            PUSH(1),
+            RECORD(2);
+
+            private final int index;
+
+            StartPart(int index) {
+                this.index = index;
+            }
+
+            public int getIndex() {
+                return index;
+            }
+        }
+
+        public void onStarted(StartPart part, boolean isSuccess)
+        {
+            // 使用原子操作设置状态（1表示成功，-1表示失败）
+            isStarted.set(part.getIndex(), isSuccess ? 1 : -1);
+
+            if(currentState.get() != WorkflowState.STARTING || !isSuccess){
+                // 取消超时检测
+                try {
+                    timeoutScheduler.shutdownNow();
+                } catch (Exception e) {}
+                return;
+            }
+            if(isAllStartedSuccess())
+            {
+                Timber.tag(TAG).i("工作流开始成功");
+                // 取消超时检测
+                timeoutScheduler.shutdownNow();
+                setState(WorkflowState.WORKING);
+                updateButtonState();
+            }
+        }
+
+        public void reset() {
+            if (timeoutScheduler != null) {
+                try {
+                    timeoutScheduler.shutdownNow();
+                } catch (Exception e) {}
+            }
+            timeoutScheduler = null; // 释放引用
+
+            for (int i = 0; i < isStarted.length(); i++) {
+                isStarted.set(i, 0);
+            }
+        }
+
+        public void onBeforeStart()
+        {
+            // 确保每次启动都创建新线程池
+            if (timeoutScheduler == null || timeoutScheduler.isShutdown()) {
+                timeoutScheduler = new ScheduledThreadPoolExecutor(1, r -> {
+                    Thread t = new Thread(r);
+                    t.setDaemon(true); // 设置为守护线程
+                    return t;
+                });
+            }
+
+            // 重置所有状态
+            for (int i = 0; i < isStarted.length(); i++) {
+                isStarted.set(i, 0); // 0表示未完成
+            }
+
+            // 启动超时检测
+            timeoutScheduler.schedule(this::interrupt, TIMEOUT_MILLISECONDS, TimeUnit.MILLISECONDS);
+        }
+
+        private void interrupt()
+        {
+            currentState.set(WorkflowState.ERROR);
+            Timber.tag(TAG).w("启动超时，未完成组件状态:");
+            for (int i = 0; i < isStarted.length(); i++) {
+                int status = isStarted.get(i);
+                Timber.tag(TAG).w("%s: %s",
+                        StartPart.values()[i].name(),
+                        status == 1 ? "成功" : status == -1 ? "失败" : "未完成"
+                );
+            }
+            Stop();
+        }
+
+        // 状态检查
+        public boolean isAllStartedSuccess() {
+            for (int i = 0; i < isStarted.length(); i++) {
+                if (isStarted.get(i) != 1) {
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -163,7 +255,7 @@ public class MainActivity extends AppCompatActivity {
         setState(WorkflowState.READY);
     }
 
-    public boolean setState(WorkflowState newState) {
+    public static boolean setState(WorkflowState newState) {
         // 状态校验
         if (!isValidTransition(newState)) {
             Timber.tag(TAGWorkflowState).w("非法状态转换: %s → %s",
@@ -173,7 +265,7 @@ public class MainActivity extends AppCompatActivity {
         return currentState.compareAndSet(currentState.get(), newState);
     }
 
-    private boolean isValidTransition(WorkflowState newState) {
+    private static boolean isValidTransition(WorkflowState newState) {
         // 实现状态转换规则校验
         WorkflowState current = currentState.get();
         switch (current) {
@@ -198,11 +290,11 @@ public class MainActivity extends AppCompatActivity {
         int push_initMinBitrate = 1000;
         StabilizationMode push_StabilizationMode = StabilizationMode.OIS_ONLY;//防抖
         StabilizationMode record_StabilizationMode = StabilizationMode.HYBRID;
-        int record_width = 2560;
-        int record_height = 1440;
-        int record_bitrate = 10000;//单位kbps
+        int record_width = 3840;
+        int record_height = 2160;
+        int record_bitrate = 18000;//单位kbps
         int record_fps =30;
-        String push_Url = ""; // WebRTC 推流地址，可为空？？？
+        String push_Url = "webrtc://123"; // WebRTC 推流地址，可为空？？？
 
         if(currentState.get() != WorkflowState.READY)
         {
@@ -217,12 +309,11 @@ public class MainActivity extends AppCompatActivity {
                 record_width, record_height, record_bitrate, record_fps,
                 push_StabilizationMode, record_StabilizationMode) == 0)
         {
-            Timber.tag(TAG).i("工作流开始成功");
+
         }
         else{
             Timber.tag(TAG).e("工作流开始失败");
         }
-        updateButtonState();
 
         Timber.tag(TAG).i("最终防抖配置 => 推流模式:%s, 录制模式:%s",
                 getCurrentPushStabMode().name(),
@@ -317,7 +408,8 @@ public class MainActivity extends AppCompatActivity {
                 videoPusher.startPush(push_Url);
                 // 7. 设置事件处理器
                 setupEventHandlers();
-                setState(WorkflowState.WORKING);
+                //开始异步回调
+                checker.onBeforeStart();
                 return 0;
             } catch (Exception e) {
                 setState(WorkflowState.ERROR);
@@ -329,7 +421,7 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private boolean Stop() {
+    public boolean Stop() {
         synchronized (startStopLock) {
             if (currentState.get() != WorkflowState.WORKING && currentState.get() != WorkflowState.ERROR) {
                 Timber.tag(TAG).i("无需重复停止");
@@ -347,6 +439,11 @@ public class MainActivity extends AppCompatActivity {
                 // 3. 停止录制
                 if (videoRecorder != null) {
                     videoRecorder.stopRecording();
+                }
+                //销毁开始回调
+                if(checker != null)
+                {
+                    checker.reset();
                 }
 
                 setState(WorkflowState.READY);
@@ -583,7 +680,7 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
                                   int recordHeight, int targetFps,
                                   StabilizationMode pushStabMode,
                                   StabilizationMode recordStabMode) {
-        Surface previewSurface = null;
+        previewSurface = null;
 
         try {
             // 准备Surface列表
@@ -660,31 +757,35 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
                 requestBuilder.addTarget(surface);
             }
 
-            // 预览显示逻辑
+            // 预览方向
+            textureView.setRotation(270);
+
+            // 计算正确的宽高比
+            float aspectRatio = (float) pushHeight / pushWidth;
+
+            // 更新布局参数
             textureView.post(() -> {
-                if (textureView == null) { // 新增空检查
-                    Timber.tag(TAGCamera).e("TextureView 已被释放，无法调整预览");
-                    return;
-                }
+                ViewGroup parent = (ViewGroup) textureView.getParent();
+                int viewWidth = parent.getWidth();
+                int viewHeight = parent.getHeight();
 
-                // 设置合适的宽高比
-                int viewWidth = textureView.getWidth();
-                int viewHeight = textureView.getHeight();
-                float aspectRatio = (float) pushWidth / pushHeight;
+                // 计算适配后的尺寸
+                int targetWidth, targetHeight;
+                targetWidth = viewHeight;
+                targetHeight = (int) (viewHeight / aspectRatio);
 
-                // 计算调整后的尺寸
-                if (viewHeight > (viewWidth / aspectRatio)) {
-                    textureView.setLayoutParams(new FrameLayout.LayoutParams(
-                            viewWidth, (int) (viewWidth / aspectRatio)));
-                } else {
-                    textureView.setLayoutParams(new FrameLayout.LayoutParams(
-                            (int) (viewHeight * aspectRatio), viewHeight));
-                }
+                // 设置居中布局参数
+                FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                        targetWidth,
+                        targetHeight
+                );
+                params.gravity = Gravity.CENTER;
+                textureView.setLayoutParams(params);
 
-                // 延迟显示确保布局完成
-                new Handler().postDelayed(() ->
-                        textureView.setVisibility(View.VISIBLE), 100);
-            });
+                    // 延迟显示确保布局完成
+                    new Handler().postDelayed(() ->
+                            textureView.setVisibility(View.VISIBLE), 100);
+                });
 
 
             // 创建摄像头会话
@@ -696,6 +797,9 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
                         session.setRepeatingRequest(requestBuilder.build(), null, cameraHandler);
                         Now_Push_fps.set(fpsRange.getUpper());
                         Now_Record_fps.set(fpsRange.getUpper());
+
+                        Timber.tag(TAGCamera).i("摄像头初始化成功");
+                        checker.onStarted(onStartedCheck.StartPart.CAMERA, true);
                     } catch (CameraAccessException e) {
                         handleCameraError(ERROR_CAMERA_SERVICE);
                     }
@@ -805,6 +909,7 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
 
         Timber.tag(TAGCamera).e("摄像头错误[%d]: %s", errorCode, errorDesc);
         setState(WorkflowState.ERROR);
+        checker.onStarted(onStartedCheck.StartPart.CAMERA, false);
         Stop();
     }
 
@@ -884,7 +989,7 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
     }
 
     /////////////////////////////////////////////////////////////////////////////////////////
-                                  //推流事件处理部分//***&&
+                                  //推流与录制事件处理部分//***&&
 
     private void setupEventHandlers() {
         Disposable disposable = videoPusher.getReportSubject()
@@ -927,6 +1032,20 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
                     }
                 });
         compositeDisposable.add(disposable);
+
+        Disposable recorddisposable = videoRecorder.getReportSubject()
+                .observeOn(AndroidSchedulers.mainThread())
+                .subscribe(report -> {
+                    switch (report.type) {
+                        case ERROR:
+                            handleRecordError(report);
+                            break;
+                        case STARTED:
+                            handleRecordStart(report);
+                            break;
+                    }
+                });
+        compositeDisposable.add(recorddisposable);
     }
 
     private void handlePushStart(VideoPusher.PushReport report) {
@@ -936,6 +1055,8 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
         String url = report.message;
         Timber.tag(TAG).i("推流已开始,平均码率：%dkbps,最大码率:%dbps,最小码率:%dbps.推流url%s"
         ,initialAvg,initialMax,initialMin,url);
+
+        checker.onStarted(onStartedCheck.StartPart.PUSH, true);
     }
 
     private void handlePushStop(VideoPusher.PushReport report) {
@@ -963,6 +1084,7 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
         int errorcode = report.code;
         Timber.tag(TAG).e("推流出错,代码：%d,消息：%s",errorcode,errormsg);
         setState(WorkflowState.ERROR);
+        checker.onStarted(onStartedCheck.StartPart.PUSH, false);
         Stop();
     }
 
@@ -986,6 +1108,22 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
         Timber.tag(TAG).e("重连成功");
     }
 
+    private void handleRecordError(VideoRecorder.RecordReport report)
+    {
+        String errormsg = report.message;
+        int errorcode = report.code;
+        Timber.tag(TAG).e("录制出错,代码：%d,消息：%s",errorcode,errormsg);
+        setState(WorkflowState.ERROR);
+        checker.onStarted(onStartedCheck.StartPart.RECORD, false);
+        Stop();
+    }
+
+    private void handleRecordStart(VideoRecorder.RecordReport report)
+    {
+        Timber.tag(TAG).i("录制启动成功");
+        checker.onStarted(onStartedCheck.StartPart.RECORD, true);
+    }
+
     public boolean ispermitted() {
         synchronized (checkPermissionLock) {
             return ispermitted;
@@ -998,12 +1136,13 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
     }
 
     public static String generateUniqueFileName(Context context) {
-        //创建专属存储目录
-        File recordsDir = new File(context.getExternalFilesDir(null), "SuperRecords");
-        if (!recordsDir.exists() && !recordsDir.mkdirs()) {
-            Timber.e("创建目录失败");
-            return null;
-        }
+        // 获取DCIM目录下的自定义文件夹
+        File recordsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM);
+        //File recordsDir = new File(dcimDir, "SuperRecords");
+        //if (!recordsDir.exists() && !recordsDir.mkdirs()) {
+            //Timber.e("创建目录失败");
+            //return null;
+        //}
         //获取当前日期字符串
         SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd", Locale.CHINA);
         String dateStr = dateFormat.format(new Date());
@@ -1024,7 +1163,7 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
                 }
             }
         }
-        //生成新序号（两位数格式）
+        //生成新序号（三位数格式）
         String newNumber = String.format(Locale.CHINA, "%03d", maxNumber + 1);
         //组合完整路径
         return new File(recordsDir,
@@ -1043,15 +1182,12 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
     @Override
     protected void onPause() {
         super.onPause();
+        Stop();
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        if (textureView != null) {
-            surfaceTexture = textureView.getSurfaceTexture();
-            isSurfaceAvailable = (surfaceTexture != null);
-        }
     }
 
     @Override
@@ -1062,9 +1198,6 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
         //释放RxJava资源
         if (compositeDisposable != null && !compositeDisposable.isDisposed()) {
             compositeDisposable.dispose();
-        }
-        if (cameraProvider != null) {
-            cameraProvider.unbindAll();
         }
         super.onDestroy();
     }

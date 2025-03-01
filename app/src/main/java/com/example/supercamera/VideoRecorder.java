@@ -1,22 +1,16 @@
 package com.example.supercamera;
 
-import com.example.supercamera.BuildConfig;
 import android.media.MediaCodec;
 import android.media.MediaCodecInfo;
 import android.media.MediaFormat;
 import android.media.MediaMuxer;
 import android.view.Surface;
-
 import androidx.annotation.NonNull;
-
-import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
-import io.reactivex.rxjava3.core.BackpressureStrategy;
-import io.reactivex.rxjava3.disposables.Disposable;
-import io.reactivex.rxjava3.schedulers.Schedulers;
+
 import io.reactivex.rxjava3.subjects.PublishSubject;
 import timber.log.Timber;
 
@@ -24,18 +18,35 @@ public class VideoRecorder {
     private MediaCodec videoEncoder;
     private MediaMuxer mediaMuxer;
     private int trackIndex;
-    //private Disposable recordingDisposable;
     private static final String TAG = "VideoRecorder";
     public final AtomicBoolean isRecording = new AtomicBoolean(false);
-    //private final ExecutorService muxerExecutor = Executors.newSingleThreadExecutor();
     private int width;
     private int height;
     private final Object dimensionLock = new Object();
     private Surface inputSurface; //Surface成员
     private long lastPresentationTimeUs = 0;
-    //private final AtomicBoolean isSurfaceReady = new AtomicBoolean(false);
     private final ExecutorService encoderExecutor = Executors.newSingleThreadExecutor();
     private final AtomicBoolean isInitializing = new AtomicBoolean(false);
+    private final PublishSubject<RecordReport> reportSubject = PublishSubject.create();
+
+    // 事件类型定义
+    public enum RecordEventType {
+        ERROR,
+        STARTED
+    }
+
+    // 事件报告类
+    public static class RecordReport {
+        public final RecordEventType type;
+        public final int code;
+        public final String message;
+
+        public RecordReport(RecordEventType type, int code, String message) {
+            this.type = type;
+            this.code = code;
+            this.message = message;
+        }
+    }
 
     public void startRecording(int width, int height, int fps, int bitrate, String outputPath) {
         if (isInitializing.get()) return;
@@ -49,16 +60,8 @@ public class VideoRecorder {
                 this.height = height;
 
                 // 2. 初始化 MediaMuxer
-                try {
                     mediaMuxer = new MediaMuxer(outputPath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
-                }
-                catch (Exception e)
-                {
-                    Timber.tag(TAG).e(e.getMessage());
-                }
                 // 1. 提前初始化编码器（H.264）
-                try {
-
                     MediaFormat format = MediaFormat.createVideoFormat(
                             MediaFormat.MIMETYPE_VIDEO_AVC, width, height
                     );
@@ -90,14 +93,10 @@ public class VideoRecorder {
 
                     videoEncoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC);
                     videoEncoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
-                } catch (Exception e) {
-                    Timber.tag(TAG).e(e.getMessage());
-                }
 
                 Timber.tag(TAG).d("编码器 Surface 已准备");
 
                 //异步回调
-                try {
                     videoEncoder.setCallback(new MediaCodec.Callback() {
                         private volatile boolean muxerStarted = false;
 
@@ -133,7 +132,8 @@ public class VideoRecorder {
                                     }
                                     lastPresentationTimeUs = bufferInfo.presentationTimeUs;
 
-                                    mediaMuxer.writeSampleData(trackIndex, outputBuffer, bufferInfo);
+                                    encoderExecutor.submit(() ->
+                                    mediaMuxer.writeSampleData(trackIndex, outputBuffer, bufferInfo));
                                 } catch (Exception e) {
                                     Timber.tag(TAG).e("写入数据失败: %s", e.getMessage());
                                 } finally {
@@ -162,19 +162,15 @@ public class VideoRecorder {
                             mediaMuxer.start();
                             muxerStarted = true;
                             Timber.tag(TAG).d("Muxer 启动完成");
+                            reportSubject.onNext(new RecordReport(
+                                    RecordEventType.STARTED, 0,
+                                    "录制启动成功"));
                         }
                     });
-                } catch (Exception e) {
-                    Timber.tag(TAG).e(e.getMessage());
-                }
 
                 // 2. 提前创建 Surface
-                try {
                     inputSurface = videoEncoder.createInputSurface();
                     videoEncoder.start(); // 启动编码器但不立即开始录制
-                } catch (Exception e) {
-                    Timber.tag(TAG).e(e.getMessage());
-                }
 
                 isRecording.set(true);
 
@@ -183,6 +179,9 @@ public class VideoRecorder {
             } catch (Exception e) {
                 Timber.tag(TAG).e(e, "录制初始化失败");
                 cleanupResources();
+                reportSubject.onNext(new RecordReport(
+                        RecordEventType.ERROR, 0,
+                        "录制初始化失败"));
                 throw new RuntimeException("录制初始化失败");
             }
     }
@@ -272,6 +271,10 @@ public class VideoRecorder {
                 Timber.tag(TAG).e(e, "资源清理异常");
             }
         }
+    }
+
+    public PublishSubject<RecordReport> getReportSubject() {
+        return reportSubject;
     }
 
 }
