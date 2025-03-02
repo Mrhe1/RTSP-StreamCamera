@@ -10,17 +10,22 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 import timber.log.Timber;
 
 public class YUVConverter {
     private static final String TAG = "YUVConverter";
+    // 添加统计变量
+    private static final int LOG_INTERVAL = 10; // 每处理10帧输出一次日志
+    private static final AtomicLong totalDuration = new AtomicLong(0);
+    private static final AtomicInteger frameCount = new AtomicInteger(0);
 
     // 硬引用缓冲池
     private static class YUVBufferPool {
         private static final byte[][] bufferPool = new byte[16][];
         private static int currentIndex = 0;
-
         public static synchronized byte[] getBuffer(int requiredSize) {
             // 1. 尝试复用现有缓冲区
             for (int i = 0; i < bufferPool.length; i++) {
@@ -77,8 +82,21 @@ public class YUVConverter {
         byte[] buffer = YUVBufferPool.getBuffer(calculateSize(image));
         copyImageData(image, buffer);
         long duration = System.nanoTime() - start;
-        Timber.tag(TAG).d("Copy耗时: %.2fms", duration/1e6f);
-        return Arrays.copyOf(buffer, calculateSize(image));
+
+        // 使用原子变量统计
+        long sum = totalDuration.addAndGet(duration);
+        int count = frameCount.incrementAndGet();
+
+        // 达到统计间隔时输出平均耗时
+        if (count % LOG_INTERVAL == 0) {
+            float avgMs = (sum / (float) count) / 1e6f;
+            Timber.tag(TAG).d("平均处理耗时: %.2fms (基于%d帧)", avgMs, count);
+            totalDuration.set(0);
+            frameCount.set(0);
+        }
+
+        //return Arrays.copyOf(buffer, calculateSize(image));
+        return buffer;
     }
 
     private static int calculateSize(Image image) {
