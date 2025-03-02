@@ -3,7 +3,6 @@ package com.example.supercamera;
 import com.example.supercamera.BuildConfig;
 import com.google.ar.core.ImageFormat;
 import android.media.Image;
-import java.lang.ref.SoftReference;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 import timber.log.Timber;
@@ -11,32 +10,27 @@ import timber.log.Timber;
 public class YUVConverter {
     private static final String TAG = "YUVConverter";
 
-    // 静态缓冲池类
+    // 硬引用缓冲池
     private static class YUVBufferPool {
-        private static final SoftReference<byte[]>[] bufferPool = new SoftReference[8];
+        private static final byte[][] bufferPool = new byte[8][];
         private static int currentIndex = 0;
 
         public static synchronized byte[] getBuffer(int requiredSize) {
             // 1. 尝试复用现有缓冲区
             for (int i = 0; i < bufferPool.length; i++) {
-                SoftReference<byte[]> ref = bufferPool[i];
-                if (ref != null) {
-                    byte[] buf = ref.get();
-                    if (buf != null && buf.length >= requiredSize) {
-                        // 循环使用索引
-                        currentIndex = (i + 1) % bufferPool.length;
-                        return buf;
-                    }
+                byte[] buf = bufferPool[i];
+                if (buf != null && buf.length >= requiredSize) {
+                    currentIndex = (i + 1) % bufferPool.length;
+                    return buf;
                 }
             }
 
             // 2. 分配新缓冲区
-            byte[] newBuf = new byte[(int) (requiredSize * 1.2)]; // 20%余量
-            bufferPool[currentIndex] = new SoftReference<>(newBuf);
+            byte[] newBuf = new byte[(int) (requiredSize * 1.2)];
+            bufferPool[currentIndex] = newBuf;
             currentIndex = (currentIndex + 1) % bufferPool.length;
             return newBuf;
         }
-
     }
 
     public static byte[] convertYUV420888ToYUV420P(Image image) {
@@ -47,16 +41,11 @@ public class YUVConverter {
             throw new IllegalArgumentException("无效的平面数量");
         }
 
-        //long start = System.nanoTime();
-
+        long start = System.nanoTime();
         byte[] buffer = YUVBufferPool.getBuffer(calculateSize(image));
         copyImageData(image, buffer);
-
-        //long duration = System.nanoTime() - start;
-        //Timber.tag(TAG).i("Copy耗时: %.2fms", duration/1e6f);
-
-        //logImageInfo(image);//only debug use********&&&&&&&&
-
+        long duration = System.nanoTime() - start;
+        Timber.tag(TAG).i("Copy耗时: %.2fms", duration/1e6f);
         return Arrays.copyOf(buffer, calculateSize(image));
     }
 
@@ -70,49 +59,47 @@ public class YUVConverter {
         int height = image.getHeight();
 
         // Y分量
-        copyPlane(planes[0], output, 0,
-                width, height,
-                planes[0].getRowStride(),
-                planes[0].getPixelStride());
+        copyPlaneOptimized(planes[0], output, 0, width, height);
 
-        // UV分量（需要子采样）
+        // UV分量
         int uvWidth = width / 2;
         int uvHeight = height / 2;
         int uvOffset = width * height;
 
         // U分量
-        copyPlane(planes[1], output, uvOffset,
-                uvWidth, uvHeight,
-                planes[1].getRowStride(),
-                planes[1].getPixelStride());
+        copyPlaneOptimized(planes[1], output, uvOffset, uvWidth, uvHeight);
 
         // V分量
-        copyPlane(planes[2], output, uvOffset + uvWidth * uvHeight,
-                uvWidth, uvHeight,
-                planes[2].getRowStride(),
-                planes[2].getPixelStride());
+        copyPlaneOptimized(planes[2], output, uvOffset + uvWidth * uvHeight, uvWidth, uvHeight);
     }
 
-    private static void copyPlane(Image.Plane plane, byte[] output, int offset,
-                                  int width, int height,
-                                  int rowStride, int pixelStride) {
+    private static void copyPlaneOptimized(Image.Plane plane, byte[] output, int offset,
+                                           int width, int height) {
         ByteBuffer buffer = plane.getBuffer();
         buffer.rewind();
 
-        // 计算每行有效数据长度
-        int bytesPerPixel = (pixelStride == 2 && (plane.getPixelStride() == 2)) ? 2 : 1; // 兼容YUV422情况
-        int validRowLength = width * bytesPerPixel;
+        final int rowStride = plane.getRowStride();
+        final int pixelStride = plane.getPixelStride();
 
-        // 使用安全拷贝方式
         if (pixelStride == 1 && rowStride == width) {
             buffer.get(output, offset, width * height);
-        } else {
-            byte[] rowBuffer = new byte[rowStride]; // 使用实际行跨度
-            for (int y = 0; y < height; y++) {
-                buffer.get(rowBuffer, 0, Math.min(rowStride, buffer.remaining()));
-                for (int x = 0; x < validRowLength; x += pixelStride) { // 按实际像素步长拷贝
-                    if ((offset + y * width + (x / pixelStride)) >= output.length) break;
-                    output[offset + y * width + (x / pixelStride)] = rowBuffer[x];
+            return;
+        }
+
+        byte[] rowBuffer = new byte[rowStride];
+        for (int y = 0; y < height; y++) {
+            buffer.get(rowBuffer, 0, Math.min(rowStride, buffer.remaining()));
+            int destIndex = offset + y * width;
+
+            if (pixelStride == 2) {
+                // 优化步长为2的情况
+                for (int x = 0; x < width; x++) {
+                    output[destIndex + x] = rowBuffer[x << 1]; // x*2 使用位移优化
+                }
+            } else {
+                // 通用处理
+                for (int x = 0; x < width; x += pixelStride) {
+                    output[destIndex + (x / pixelStride)] = rowBuffer[x];
                 }
             }
         }
