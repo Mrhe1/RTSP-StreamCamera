@@ -379,24 +379,25 @@ public class VideoPusher {
                 // 使用计算线程池
                 .observeOn(Schedulers.computation())
                 .subscribe(frame -> {
-                    if (livePusher != null && livePusher.isPushing()) {
-                        // 校验视频帧格式（ YUV420 ）
-                        int expectedSize = width * height * 3 / 2;
-                        if (frame.length < expectedSize) {
-                            Timber.tag(TAG).e("视频帧数据异常: 实际大小=%d，预期大小=%d", frame.length, expectedSize);
-                            return;
+                        if (livePusher != null && livePusher.isPushing()) {
+                            // 校验视频帧格式（ YUV420 ）
+                            int expectedSize = width * height * 3 / 2;
+                            if (frame.length < expectedSize) {
+                                Timber.tag(TAG).e("视频帧数据异常: 实际大小=%d，预期大小=%d", frame.length, expectedSize);
+                                return;
+                            }
+                            long elapsedUs = (System.nanoTime() - mStartTimeNs) / 1000L;//使用相对时间戳
+                            livePusher.inputStreamVideoData(
+                                    frame,    // data
+                                    width,    // width
+                                    height,   // height
+                                    stride,   // stride
+                                    frame.length, // size
+                                    elapsedUs, // 微秒
+                                    rotation  // rotation
+                            );
                         }
-                        long elapsedUs = (System.nanoTime() - mStartTimeNs) / 1000L;//使用相对时间戳
-                        livePusher.inputStreamVideoData(
-                                frame,    // data
-                                width,    // width
-                                height,   // height
-                                stride,   // stride
-                                frame.length, // size
-                                elapsedUs, // 微秒
-                                rotation  // rotation
-                        );
-                    }
+
                 });
         compositeDisposable.add(disposable);
     }
@@ -548,6 +549,14 @@ public class VideoPusher {
                     "推流重连成功" , 0, 0, 0
             ));
         }
+    }
+
+    public boolean ispush(){
+        if(livePusher != null && livePusher.isPushing())
+        {
+            return true;
+        }
+        return false;
     }
 
     private void disposeAll() {

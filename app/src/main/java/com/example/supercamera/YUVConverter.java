@@ -13,30 +13,25 @@ public class YUVConverter {
 
     // 静态缓冲池类
     private static class YUVBufferPool {
-        private static final SoftReference<byte[]>[] bufferPool = new SoftReference[8];
+        private static final byte[][] bufferPool = new byte[8][];
         private static int currentIndex = 0;
 
         public static synchronized byte[] getBuffer(int requiredSize) {
-            // 1. 尝试复用现有缓冲区
+            // 1. 尝试复用现有缓冲区（修改检查逻辑）
             for (int i = 0; i < bufferPool.length; i++) {
-                SoftReference<byte[]> ref = bufferPool[i];
-                if (ref != null) {
-                    byte[] buf = ref.get();
-                    if (buf != null && buf.length >= requiredSize) {
-                        // 循环使用索引
-                        currentIndex = (i + 1) % bufferPool.length;
-                        return buf;
-                    }
+                byte[] buf = bufferPool[i];
+                if (buf != null && buf.length >= requiredSize) {
+                    currentIndex = (i + 1) % bufferPool.length;
+                    return buf;
                 }
             }
 
-            // 2. 分配新缓冲区
-            byte[] newBuf = new byte[(int) (requiredSize * 1.2)]; // 20%余量
-            bufferPool[currentIndex] = new SoftReference<>(newBuf);
+            // 2. 分配新缓冲区（直接存储硬引用）
+            byte[] newBuf = new byte[(int)(requiredSize * 1.2)];
+            bufferPool[currentIndex] = newBuf;
             currentIndex = (currentIndex + 1) % bufferPool.length;
             return newBuf;
         }
-
     }
 
     public static byte[] convertYUV420888ToYUV420P(Image image) {
