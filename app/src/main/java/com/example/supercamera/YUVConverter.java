@@ -5,6 +5,12 @@ import com.google.ar.core.ImageFormat;
 import android.media.Image;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+
 import timber.log.Timber;
 
 public class YUVConverter {
@@ -12,7 +18,7 @@ public class YUVConverter {
 
     // 硬引用缓冲池
     private static class YUVBufferPool {
-        private static final byte[][] bufferPool = new byte[8][];
+        private static final byte[][] bufferPool = new byte[16][];
         private static int currentIndex = 0;
 
         public static synchronized byte[] getBuffer(int requiredSize) {
@@ -33,6 +39,32 @@ public class YUVConverter {
         }
     }
 
+    // 使用静态线程池并添加关闭方法
+    private static ExecutorService uvExecutor;
+
+    static {
+        uvExecutor = Executors.newFixedThreadPool(2, r -> {
+            Thread t = new Thread(r);
+            t.setPriority(Thread.MAX_PRIORITY);
+            t.setName("YUV-Processor");
+            return t;
+        });
+    }
+
+    // 添加资源释放方法
+    public static void release() {
+        if (uvExecutor != null && !uvExecutor.isShutdown()) {
+            uvExecutor.shutdownNow();
+            try {
+                if (!uvExecutor.awaitTermination(500, TimeUnit.MILLISECONDS)) {
+                    Timber.w("UV线程池关闭超时");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+
     public static byte[] convertYUV420888ToYUV420P(Image image) {
         if (image.getFormat() != ImageFormat.YUV_420_888) {
             throw new IllegalArgumentException("Invalid image format");
@@ -45,7 +77,7 @@ public class YUVConverter {
         byte[] buffer = YUVBufferPool.getBuffer(calculateSize(image));
         copyImageData(image, buffer);
         long duration = System.nanoTime() - start;
-        Timber.tag(TAG).i("Copy耗时: %.2fms", duration/1e6f);
+        Timber.tag(TAG).d("Copy耗时: %.2fms", duration/1e6f);
         return Arrays.copyOf(buffer, calculateSize(image));
     }
 
@@ -66,12 +98,49 @@ public class YUVConverter {
         int uvHeight = height / 2;
         int uvOffset = width * height;
 
+        copyUVPlanes(planes[1], planes[2],
+                output, uvOffset, uvWidth, uvHeight);
         // U分量
-        copyPlaneOptimized(planes[1], output, uvOffset, uvWidth, uvHeight);
+        //copyPlaneOptimized(planes[1], output, uvOffset, uvWidth, uvHeight);
 
         // V分量
-        copyPlaneOptimized(planes[2], output, uvOffset + uvWidth * uvHeight, uvWidth, uvHeight);
+        //copyPlaneOptimized(planes[2], output, uvOffset + uvWidth * uvHeight, uvWidth, uvHeight);
     }
+
+    private static void copyUVPlanes(Image.Plane uPlane, Image.Plane vPlane,
+                                     byte[] output, int offset, int width, int height) {
+        final int uvWidth = width / 2;
+        final int uvHeight = height / 2;
+
+        CountDownLatch latch = new CountDownLatch(2);
+
+        uvExecutor.execute(() -> {
+            try {
+                copyPlaneOptimized(uPlane, output, offset, uvWidth, uvHeight);
+            } finally {
+                latch.countDown();
+            }
+        });
+
+        uvExecutor.execute(() -> {
+            try {
+                copyPlaneOptimized(vPlane, output, offset + uvWidth*uvHeight, uvWidth, uvHeight);
+            } finally {
+                latch.countDown();
+            }
+        });
+
+        try {
+            // 设置合理超时时间（根据帧率计算）
+            long timeout = 15;
+            if (!latch.await(timeout, TimeUnit.MILLISECONDS)) {
+                Timber.e("UV平面处理超时");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
 
     private static void copyPlaneOptimized(Image.Plane plane, byte[] output, int offset,
                                            int width, int height) {

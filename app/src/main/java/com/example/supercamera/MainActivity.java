@@ -121,7 +121,7 @@ public class MainActivity extends AppCompatActivity {
 
     public class onStartedCheck{
         private AtomicIntegerArray isStarted = new AtomicIntegerArray(3);
-        private static final int TIMEOUT_MILLISECONDS = 8500;
+        private static final int TIMEOUT_MILLISECONDS = 142500;
         private ScheduledExecutorService timeoutScheduler;
         public enum StartPart {
             CAMERA(0),
@@ -704,10 +704,6 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
 
             // 设置图像可用监听器
             streamingReader.setOnImageAvailableListener(reader -> {
-                if (!videoPusher.ispush()) { // 增加状态检查
-                    reader.close();
-                    return;
-                }
                 try (Image image = reader.acquireLatestImage()) { // 使用try-with-resources确保自动关闭
                     if (image != null && videoPusher != null) {
                         try {
@@ -917,37 +913,53 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
         try {
             runOnUiThread(() -> {
                 if (textureView != null) {
-                    textureView.setVisibility(View.GONE); // 仅隐藏，不置空
+                    textureView.setVisibility(View.GONE);
                 }
             });
 
-            // 统一释放所有资源
+            // 先停止回调处理
+            if (streamingReader != null) {
+                streamingReader.setOnImageAvailableListener(null, null); // 移除监听器
+            }
+
+            // 按正确顺序释放资源
             if (cameraCaptureSession != null) {
-                cameraCaptureSession.abortCaptures(); // 立即终止未完成请求
+                cameraCaptureSession.abortCaptures();
                 cameraCaptureSession.close();
                 cameraCaptureSession = null;
             }
-            if (cameraDevice != null) {
-                cameraDevice.close();
-                cameraDevice = null;
-            }
-            if (cameraHandler != null) {
-                cameraHandler.getLooper().quitSafely();
-            }
-            if (streamingHandlerThread != null) {
-                streamingHandlerThread.quitSafely();
-                streamingHandlerThread = null;
-                streamingHandler = null;
-            }
+
             if (streamingReader != null) {
                 streamingReader.close();
                 streamingReader = null;
             }
-        }
-        catch (Exception e) {
-            Timber.tag(TAGCamera).e("摄像头关闭失败:%s",e.getMessage());
+
+            if (cameraDevice != null) {
+                cameraDevice.close();
+                cameraDevice = null;
+            }
+
+            // 最后停止线程
+            if (streamingHandlerThread != null) {
+                streamingHandlerThread.quitSafely();
+                try {
+                    streamingHandlerThread.join(500);
+                } catch (InterruptedException e) {
+                    Timber.e("等待线程停止异常");
+                }
+                streamingHandlerThread = null;
+                streamingHandler = null;
+            }
+
+            if (cameraHandler != null) {
+                cameraHandler.getLooper().quitSafely();
+                cameraHandler = null;
+            }
+        } catch (Exception e) {
+            Timber.e("摄像头关闭失败:%s", e.getMessage());
         }
     }
+
 
     ////////////////////////////////////////////////////////////////////////////////////////
                                   //权限请求部分//***&&
