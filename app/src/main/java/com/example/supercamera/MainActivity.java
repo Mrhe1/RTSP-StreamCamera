@@ -292,7 +292,7 @@ public class MainActivity extends AppCompatActivity {
         StabilizationMode record_StabilizationMode = StabilizationMode.HYBRID;
         int record_width = 3840;
         int record_height = 2160;
-        int record_bitrate = 18000;//单位kbps
+        int record_bitrate = 20000;//单位kbps
         int record_fps =30;
         String push_Url = "webrtc://123"; // WebRTC 推流地址，可为空？？？
 
@@ -395,14 +395,14 @@ public class MainActivity extends AppCompatActivity {
                 }
                 // 3. 初始化录制服务
                 videoRecorder = new VideoRecorder();
-                videoRecorder.startRecording(record_width, record_height, record_fps, record_bitrate, record_Path); // 提前准备
+                videoRecorder.startRecording(record_width, record_height, push_fps, record_bitrate, record_Path); // 提前准备
                 // 4. 检查 record Surface 有效性
                 if (!videoRecorder.isSurfaceValid()) {
                     Timber.tag(TAG).e("录制器 Surface 初始化失败");
                     return 5;
                 }
                 // 5. 启动摄像头
-                startCamera(push_width, push_height, record_width, record_height, push_fps,
+                startCamera(push_width, push_height, record_width, record_height, 60,
                         push_StabilizationMode, record_StabilizationMode);
                 // 6. 开始推流
                 videoPusher.startPush(push_Url);
@@ -610,7 +610,6 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
             handleCameraError(SURFACE_TIMEOUT);
             return;
         }
-
         // 检查 textureView 是否已被释放
         if (textureView == null) {
             textureView = findViewById(R.id.textureView);
@@ -705,7 +704,7 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
 
             // 设置图像可用监听器
             streamingReader.setOnImageAvailableListener(reader -> {
-                if (!videoRecorder.isRecording.get()) { // 增加状态检查
+                if (!videoPusher.ispush()) { // 增加状态检查
                     reader.close();
                     return;
                 }
@@ -758,7 +757,7 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
             }
 
             // 预览方向
-            textureView.setRotation(270);
+            runOnUiThread(() -> textureView.setRotation(270));
 
             // 计算正确的宽高比
             float aspectRatio = (float) pushHeight / pushWidth;
