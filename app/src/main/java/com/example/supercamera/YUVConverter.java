@@ -24,7 +24,7 @@ public class YUVConverter {
 
     // 硬引用缓冲池
     private static class YUVBufferPool {
-        private static final byte[][] bufferPool = new byte[16][];
+        private static final byte[][] bufferPool = new byte[32][];
         private static int currentIndex = 0;
         public static synchronized byte[] getBuffer(int requiredSize) {
             // 1. 尝试复用现有缓冲区

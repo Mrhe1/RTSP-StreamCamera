@@ -132,7 +132,7 @@ public class VideoPusher {
             throw new IllegalArgumentException("帧率超出范围");
         }
         pushConfig.setFps(AlivcFpsEnum.fromValue(fps));
-        pushConfig.setVideoOnly	(true);
+        //pushConfig.setVideoOnly	(true);
         pushConfig.setVideoEncodeType(AlivcEncodeType.Encode_TYPE_H264);
         pushConfig.setVideoEncodeGop(AlivcVideoEncodeGopEnum.fromValue(2));
         pushConfig.setQualityMode(AlivcQualityModeEnum.QM_CUSTOM);
@@ -201,23 +201,23 @@ public class VideoPusher {
             }
             @Override public String onPushURLAuthenticationOverdue(AlivcLivePusher pusher) {
                 //url鉴权过期
-                mPushUrlRef.set(livePusher.getPushUrl());
+                //mPushUrlRef.set(livePusher.getPushUrl());
                 Timber.tag(TAG).w("url鉴权过期,开始重连,新url：%s",mPushUrlRef.get());
                 reportSubject.onNext(new PushReport(EventType.URLCHANGE, 0,
                         mPushUrlRef.get(),
                         0, 0, 0));
-                try{
-                    livePusher.stopPush();
-                    livePusher.startPush(mPushUrlRef.get());
-                } catch (IllegalStateException | IllegalArgumentException e) {
-                    Timber.tag(TAG).e(e, "重连操作异常");
-                    reportSubject.onNext(new PushReport(
-                            EventType.RECONNECTION_ERROR, 0,
-                            "重连异常: " + e.getMessage(),
-                            0, 0, 0
-                    ));
-                    handleReconnectError();//处理连接失败
-                }
+                //try{
+                    //livePusher.stopPush();
+                    //livePusher.startPush(mPushUrlRef.get());
+                //} catch (IllegalStateException | IllegalArgumentException e) {
+                    //Timber.tag(TAG).e(e, "重连操作异常");
+                    //reportSubject.onNext(new PushReport(
+                            //EventType.RECONNECTION_ERROR, 0,
+                            //"重连异常: " + e.getMessage(),
+                            //0, 0, 0
+                    //));
+                    //handleReconnectError();//处理连接失败
+                //}
                 return null;
             }
             @Override public void onSendMessage(AlivcLivePusher pusher) {}

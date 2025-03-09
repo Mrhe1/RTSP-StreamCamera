@@ -285,16 +285,16 @@ public class MainActivity extends AppCompatActivity {
         int push_width = 1280;
         int push_height = 720;
         int push_fps = 30;//**现阶段push——fps必须============record——fps**&*&&&&
-        int push_initAvgBitrate = 2500;//单位kbps
-        int push_initMaxBitrate = 4000;
-        int push_initMinBitrate = 1000;
+        int push_initAvgBitrate = 1000;//单位kbps
+        int push_initMaxBitrate = 1200;
+        int push_initMinBitrate = 400;
         StabilizationMode push_StabilizationMode = StabilizationMode.OIS_ONLY;//防抖
         StabilizationMode record_StabilizationMode = StabilizationMode.HYBRID;
-        int record_width = 3840;
-        int record_height = 2160;
-        int record_bitrate = 20000;//单位kbps
+        int record_width = 1920;
+        int record_height = 1080;
+        int record_bitrate = 2000;//单位kbps
         int record_fps =30;
-        String push_Url = "webrtc://123"; // WebRTC 推流地址，可为空？？？
+        String push_Url = "artc://susivvkjnfkj.xyz/supercamera/test?auth_key=1741096726-0-0-ba74d4cf9425560e376b453db36528e0"; // WebRTC 推流地址，可为空？？？
 
         if(currentState.get() != WorkflowState.READY)
         {
@@ -1108,11 +1108,11 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
     }
 
     private void handleNetworkDelay(VideoPusher.PushReport report) {
-        Timber.tag(TAG).e("网络延迟rtt：%dms",report.code);
+        Timber.tag(TAG).i("网络延迟rtt：%dms",report.code);
     }
 
     private void handleUrlChange(VideoPusher.PushReport report) {
-        Timber.tag(TAG).e("推流改变，url：%s",report.message);
+        Timber.tag(TAG).i("推流改变，url：%s",report.message);
     }
 
     private void handleReconnectionSuccess(VideoPusher.PushReport report) {
