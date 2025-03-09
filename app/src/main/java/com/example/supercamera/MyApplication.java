@@ -2,14 +2,8 @@ package com.example.supercamera;
 
 import android.app.Application;
 import com.example.supercamera.BuildConfig;
-
-import com.alivc.live.pusher.AlivcLiveBase;
-import com.alivc.live.pusher.AlivcLiveBaseListener;
-import com.alivc.live.pusher.AlivcLivePushLogLevel;
-import com.alivc.live.pusher.AlivcLivePushConstants;
 import timber.log.Timber;
 import timber.log.Timber.DebugTree;
-
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
@@ -25,48 +19,15 @@ public class MyApplication extends Application {
 
         // 优先初始化日志系统
         initLoggingSystem();
-
-        // 初始化阿里云推流 SDK
-        initAliyunLivePusherSDK();
     }
 
     private void initLoggingSystem() {
         if (BuildConfig.DEBUG) {
-            Timber.plant(new timber.log.Timber.DebugTree());
+            Timber.plant(new DebugTree());
         } else {
             Timber.plant(new ReleaseTree());
         }
     }
-
-    private void initAliyunLivePusherSDK() {
-
-        AlivcLiveBase.setListener(new AlivcLiveBaseListener() {
-            //@Override
-            public void onLicenceCheck(AlivcLivePushConstants.AlivcLiveLicenseCheckResultCode result, String reason)
-            {
-                if(result != AlivcLivePushConstants.AlivcLiveLicenseCheckResultCode.AlivcLiveLicenseCheckResultCodeSuccess)
-                {
-                    Timber.e("阿里云SDK初始化失败:" + result + "," + reason);
-                    System.exit(0);
-                }
-                else{
-                    Timber.i("阿里云sdk注册成功");
-                }
-            }
-        });
-
-        try {
-            // 先配置日志，再初始化 SDK
-            AlivcLiveBase.setLogLevel(AlivcLivePushLogLevel.AlivcLivePushLogLevelDebug);
-            AlivcLiveBase.setLogDirPath(getExternalFilesDir(null).getAbsolutePath(), 65536);
-
-            AlivcLiveBase.registerSDK();
-
-        } catch (Exception e) {
-            Timber.e(e, "阿里云SDK初始化失败");
-        }
-    }
-
 
     private class ReleaseTree extends Timber.Tree {
         @Override

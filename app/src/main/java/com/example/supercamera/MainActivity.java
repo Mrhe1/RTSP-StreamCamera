@@ -386,7 +386,7 @@ public class MainActivity extends AppCompatActivity {
             try {
                 // 2. 初始化推流服务
                 try {
-                    videoPusher = new VideoPusher(context, push_width, push_height, push_fps, push_initAvgBitrate, push_initMaxBitrate, push_initMinBitrate);
+                    videoPusher = new VideoPusher(push_Url, push_width, push_height, push_fps, push_initAvgBitrate);
                 } catch (RuntimeException e) {
                     Timber.tag(TAG).e("推流服务出错：%s", e.getMessage());
                     setState(WorkflowState.ERROR);
