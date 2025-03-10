@@ -1,15 +1,33 @@
 package com.example.supercamera;
 
+import org.bytedeco.javacpp.*;
 import org.bytedeco.ffmpeg.avcodec.*;
 import org.bytedeco.ffmpeg.avformat.*;
 import org.bytedeco.ffmpeg.avutil.*;
-import org.bytedeco.javacpp.*;
 import org.bytedeco.javacpp.BytePointer;
-import static org.bytedeco.javacpp.Pointer.*;
 
-import static org.bytedeco.ffmpeg.global.avcodec.*;
-import static org.bytedeco.ffmpeg.global.avformat.*;
-import static org.bytedeco.ffmpeg.global.avutil.*;
+import static org.bytedeco.ffmpeg.global.avcodec.AV_CODEC_ID_H264;
+import static org.bytedeco.ffmpeg.global.avcodec.AV_PKT_FLAG_KEY;
+import static org.bytedeco.ffmpeg.global.avcodec.av_packet_alloc;
+import static org.bytedeco.ffmpeg.global.avcodec.av_packet_unref;
+import static org.bytedeco.ffmpeg.global.avcodec.avcodec_parameters_copy;
+import static org.bytedeco.ffmpeg.global.avformat.AVFMT_NOFILE;
+import static org.bytedeco.ffmpeg.global.avformat.AVIO_FLAG_WRITE;
+import static org.bytedeco.ffmpeg.global.avformat.av_guess_format;
+import static org.bytedeco.ffmpeg.global.avformat.av_interleaved_write_frame;
+import static org.bytedeco.ffmpeg.global.avformat.av_write_trailer;
+import static org.bytedeco.ffmpeg.global.avformat.avformat_alloc_context;
+import static org.bytedeco.ffmpeg.global.avformat.avformat_free_context;
+import static org.bytedeco.ffmpeg.global.avformat.avformat_network_init;
+import static org.bytedeco.ffmpeg.global.avformat.avformat_new_stream;
+import static org.bytedeco.ffmpeg.global.avformat.avformat_write_header;
+import static org.bytedeco.ffmpeg.global.avformat.avio_closep;
+import static org.bytedeco.ffmpeg.global.avformat.avio_open;
+import static org.bytedeco.ffmpeg.global.avutil.AVMEDIA_TYPE_VIDEO;
+import static org.bytedeco.ffmpeg.global.avutil.av_dict_set;
+import static org.bytedeco.ffmpeg.global.avutil.av_rescale_q;
+import static org.bytedeco.ffmpeg.global.avutil.av_strerror;
+import static org.bytedeco.javacpp.Pointer.*;
 
 import android.media.MediaCodec;
 
@@ -33,6 +51,21 @@ public class FFmpegPusher {
     private String url;
     private final Object initStopLock = new Object();
 
+    // 在FFmpegPusher类中添加
+    private static String av_err2str(int errcode) {
+        BytePointer buffer = new BytePointer(128);
+        try {
+            int ret = av_strerror(errcode, buffer, buffer.capacity());
+            if (ret < 0) {
+                return "Unknown error (" + errcode + ")";
+            }
+            return buffer.getString();
+        } finally {
+            buffer.deallocate(); // 确保释放内存
+        }
+    }
+
+
     public FFmpegPusher(String url, int width, int height, int fps,
                            int avgBitrate) {
             this.url = url;
@@ -42,41 +75,54 @@ public class FFmpegPusher {
             this.avgBitrate = avgBitrate;
     }
 
-    public void initPusher(byte[] header)
+    public void initPusher(byte[] header, AVCodecParameters srcParams)
     {
         synchronized (initStopLock) {
             try {
+                // 1. 初始化上下文
                 avformat_network_init();
                 outputContext = avformat_alloc_context();
                 AVOutputFormat outputFormat = av_guess_format("rtsp", null, null);
                 outputContext.oformat(outputFormat);
 
-                // 创建视频流
+                // 2. 创建流并复制参数
                 videoStream = avformat_new_stream(outputContext, null);
-                videoStream.codecpar().codec_type(AVMEDIA_TYPE_VIDEO);
-                videoStream.codecpar().codec_id(AV_CODEC_ID_H264);
-                videoStream.codecpar().width(width);
-                videoStream.codecpar().height(height);
-                videoStream.codecpar().codec_tag(0); // 关键修改
+                if (videoStream == null) {
+                    throw new RuntimeException("无法创建视频流");
+                }
 
-                // 设置时间基
-                videoStream.time_base(new AVRational().num(1).den(fps));
+                // 使用参数复制
+                AVCodecParameters dstParams = videoStream.codecpar();
+                int ret = avcodec_parameters_copy(dstParams, srcParams);
+                if (ret < 0) {
+                    throw new RuntimeException("参数复制失败: " + av_err2str(ret));
+                }
 
-                // 设置 extradata
-                videoStream.codecpar().extradata(new org.bytedeco.javacpp.BytePointer(header));
-                videoStream.codecpar().extradata_size(header.length);
+                // 3. 强制设置关键参数（确保与编码器一致）
+                dstParams.codec_tag(0); // 必须清除原有tag
+                dstParams.extradata(new BytePointer(header)); // 设置SPS/PPS
+                dstParams.extradata_size(header.length);
 
-                // 打开输出
-                AVDictionary options = new AVDictionary(null);
-                av_dict_set(options, "rtsp_transport", "tcp", 0);
-                av_dict_set(options, "preset", "ultrafast", 0);
-                av_dict_set(options, "tune", "zerolatency", 0);
+                // 4. 时间基配置（必须与帧时间戳匹配）
+                videoStream.time_base().num(1);
+                videoStream.time_base().den(fps);
+
+                // 5. 打开输出
+                AVDictionary options = new AVDictionary();
+                av_dict_set(options, new BytePointer("rtsp_transport"), new BytePointer("tcp"), 0);
+                av_dict_set(options, new BytePointer("preset"), new BytePointer("ultrafast"), 0);
+                av_dict_set(options, new BytePointer("tune"), new BytePointer("zerolatency"), 0);
 
                 if (avio_open(outputContext.pb(), url, AVIO_FLAG_WRITE) < 0) {
                     throw new RuntimeException("无法打开输出URL");
                 }
 
-                avformat_write_header(outputContext, options);
+                // 6. 写入头部
+                ret = avformat_write_header(outputContext, options);
+                if (ret < 0) {
+                    throw new RuntimeException("写头失败: " + av_err2str(ret));
+                }
+
                 isPushing.set(true);
             } catch (Exception e) {
                 cleanup();

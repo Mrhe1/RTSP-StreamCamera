@@ -27,7 +27,8 @@
 -keep class com.example.supercamera.MainActivity { *; }
 -keep class com.example.supercamera.VideoPusher { *; }
 -keep class com.example.supercamera.VideoRecorder { *; }
--keep class com.example.supercamera.YUVConverter { *; }
+-keep class org.bytedeco.** { *; }
+-dontwarn org.bytedeco.**
 -keepclassmembers class * {
     public void yourMethod();
 }

@@ -80,10 +80,17 @@ dependencies {
     //implementation 'org.bytedeco:javacpp-platform:1.5.10'
     //implementation 'org.bytedeco:javacv-platform:1.5.10'
     //implementation 'org.bytedeco:ffmpeg-platform:6.1.1-1.5.10'
-    implementation group: 'org.bytedeco', name: 'ffmpeg-platform', version: '7.1-1.5.11'
-    implementation group: 'org.bytedeco', name: 'javacv-platform', version: '1.5.11'
-    implementation group: 'org.bytedeco', name: 'javacpp-platform', version: '1.5.11'
+    //implementation group: 'org.bytedeco', name: 'ffmpeg-platform', version: '7.1-1.5.11'
+    //implementation group: 'org.bytedeco', name: 'javacv-platform', version: '1.5.11'
+    //implementation group: 'org.bytedeco', name: 'javacpp-platform', version: '1.5.11'
     //implementation group: 'org.bytedeco', name: 'ffmpeg', version: '7.1-1.5.11'
     //implementation group: 'org.bytedeco', name: 'javacv', version: '1.5.11'
     //implementation group: 'org.bytedeco', name: 'javacpp', version: '1.5.11'
+    implementation 'org.bytedeco:javacv:1.5.9'
+    implementation 'org.bytedeco:ffmpeg:6.0-1.5.9'
+    //implementation 'org.bytedeco:ffmpeg:6.0-1.5.9:android-arm64'
+}
+configurations {
+    all*.exclude group: 'org.bytedeco', module: 'opencv'
+    all*.exclude group: 'org.bytedeco', module: 'openblas'
 }
