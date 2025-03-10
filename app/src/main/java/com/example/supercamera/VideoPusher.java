@@ -1,11 +1,16 @@
 package com.example.supercamera;
 
+import static org.bytedeco.ffmpeg.global.avcodec.AV_CODEC_ID_H264;
+import static org.bytedeco.ffmpeg.global.avutil.AVMEDIA_TYPE_VIDEO;
+
 import android.media.MediaCodec;
 import android.media.MediaCodecInfo;
 import android.media.MediaFormat;
 import android.view.Surface;
 
 import androidx.annotation.NonNull;
+
+import org.bytedeco.ffmpeg.avcodec.AVCodecParameters;
 
 import java.nio.ByteBuffer;
 import java.util.concurrent.ExecutorService;
@@ -213,6 +218,18 @@ public class VideoPusher {
             throw new RuntimeException("录制初始化失败");
         }
     }
+
+    // 获取编码器参数的示例方法
+    private AVCodecParameters getEncoderParameters() {
+        AVCodecParameters params = AVCodecParameters.();
+        params.codec_type(AVMEDIA_TYPE_VIDEO);
+        params.codec_id(AV_CODEC_ID_H264);
+        params.width(width);
+        params.height(height);
+        params.bit_rate(avgBitrate);
+        return params;
+    }
+
 
 
     // 检查 Surface 有效性
