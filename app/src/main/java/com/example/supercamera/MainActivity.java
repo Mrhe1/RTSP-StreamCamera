@@ -1013,29 +1013,17 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
                         case PUSH_STOPPED:
                             handlePushStop(report);
                             break;
-                        case NETWORK_POOR:
-                            handleNetworkPoor(report);
-                            break;
-                        case NETWORK_RECOVERY:
-                            handleNetworkRecovery(report);
-                            break;
                         case CUR_BITRATE:
                             handleBitrateReport(report);
                             break;
                         case ERROR:
                             handleError(report);
                             break;
-                        case RECONNECTION_ERROR:
+                        case CONNECTION_ERROR:
                             handleReconnectError(report);
-                            break;
-                        case PUSHER_DESTROY:
-                            handlePusherDestroy(report);
                             break;
                         case NETWORK_DELAY:
                             handleNetworkDelay(report);
-                            break;
-                        case URLCHANGE:
-                            handleUrlChange(report);
                             break;
                         case RECONNECTION_SUCCESS:
                             handleReconnectionSuccess(report);

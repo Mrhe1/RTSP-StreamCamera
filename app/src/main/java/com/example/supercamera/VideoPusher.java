@@ -1,6 +1,8 @@
 package com.example.supercamera;
 
 import static org.bytedeco.ffmpeg.global.avcodec.AV_CODEC_ID_H264;
+import static org.bytedeco.ffmpeg.global.avcodec.avcodec_parameters_alloc;
+import static org.bytedeco.ffmpeg.global.avcodec.avcodec_parameters_free;
 import static org.bytedeco.ffmpeg.global.avutil.AVMEDIA_TYPE_VIDEO;
 
 import android.media.MediaCodec;
@@ -17,6 +19,9 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import io.reactivex.rxjava3.android.schedulers.AndroidSchedulers;
+import io.reactivex.rxjava3.disposables.CompositeDisposable;
+import io.reactivex.rxjava3.disposables.Disposable;
 import io.reactivex.rxjava3.subjects.PublishSubject;
 import timber.log.Timber;
 
@@ -25,13 +30,11 @@ public class VideoPusher {
     private int trackIndex;
     private static final String TAGcodec = "StreamEncoder";
     private static final String TAG = "VideoPusher";
-    public final AtomicBoolean isRecording = new AtomicBoolean(false);
+    public final AtomicBoolean isPushing = new AtomicBoolean(false);
     private int width;
     private int height;
     private int fps;
-    private int avgBitrate;
-    private int maxBitrate;
-    private int minBitrate;
+    private int Bitrate;
     private FFmpegPusher pusher;
     private final Object dimensionLock = new Object();
     private Surface inputSurface; //Surface成员
@@ -39,36 +42,48 @@ public class VideoPusher {
     private final ExecutorService encoderExecutor = Executors.newSingleThreadExecutor();
     private final AtomicBoolean isInitializing = new AtomicBoolean(false);
     private final PublishSubject<PushReport> reportSubject = PublishSubject.create();
+    private AVCodecParameters params = avcodec_parameters_alloc();
+    private CompositeDisposable compositeDisposable;
 
     // 事件类型定义
-    public enum EventType  {
+    public enum EventType {
         ERROR,
-        STARTED
+        CUR_BITRATE,
+        PUSH_STARTED,
+        PUSH_STOPPED,
+        CONNECTION_ERROR,//重连错误
+        //PACKETSLOST,
+        NETWORK_DELAY,//网络往返延时（ms）:RTT
+        RECONNECTION_SUCCESS//重连成功
     }
 
     // 事件报告类
-    public static class PushReport  {
+    public static class PushReport {
         public final EventType type;
         public final int code;
         public final String message;
+        public final int BitrateNow;
+        public final int rtt;
 
-        public PushReport (EventType type, int code, String message) {
+        public PushReport(EventType type, int code, String message, int BitrateNow, int rtt) {
             this.type = type;
             this.code = code;
             this.message = message;
+            this.BitrateNow = BitrateNow;
+            this.rtt = rtt;
         }
     }
 
     public VideoPusher(String url, int width, int height, int fps,
-                         int avgBitrate)
+                         int Bitrate)
     {
         this.width = width;
         this.height = height;
         this.fps = fps;
-        this.avgBitrate = avgBitrate;
+        this.Bitrate = Bitrate;
 
-        pusher = new FFmpegPusher(url, width, height, fps, avgBitrate);
-        startStreamEncoder(width, height, fps, avgBitrate);
+        pusher = new FFmpegPusher(url, width, height, fps, Bitrate);
+        startStreamEncoder(width, height, fps, Bitrate);
     }
 
     public void stopPush() {
@@ -79,7 +94,7 @@ public class VideoPusher {
     private void startStreamEncoder(int width, int height, int fps, int bitrate) {
         if (isInitializing.get()) return;
         isInitializing.set(true);
-        if (isRecording.get()) {
+        if (isPushing.get()) {
             throw new RuntimeException("已经开始录制，无法重复开启");
         }
 
@@ -135,7 +150,7 @@ public class VideoPusher {
                 public void onOutputBufferAvailable(MediaCodec mc, int outputBufferId,
                                                     MediaCodec.BufferInfo bufferInfo) {
                     synchronized (dimensionLock) {
-                        if () return;
+                        if (!isPushing.get()) return;
 
                         // 获取实际的 ByteBuffer
                         ByteBuffer outputBuffer = mc.getOutputBuffer(outputBufferId);
@@ -151,12 +166,15 @@ public class VideoPusher {
                             byte[] configData = new byte[bufferInfo.size];
                             outputBuffer.position(bufferInfo.offset);
                             outputBuffer.get(configData);
-
-                            // 初始化推流器（确保只执行一次）
-                            if (!pusher.isInitialized()) {
-                                pusher.initPusher(configData);
+                            try {
+                                AVCodecParameters prt = getEncoderParameters();
+                                // 初始化推流器（确保只执行一次）
+                                if (!pusher.isInitialized()) {
+                                    pusher.initPusher(configData, prt);
+                                }
+                            } catch (Exception e) {
+                                Timber.tag(TAG).e("ffmpeg初始化失败:%s",e.getMessage());
                             }
-
                             mc.releaseOutputBuffer(outputBufferId, false);
                             return;
                         }
@@ -169,7 +187,7 @@ public class VideoPusher {
                             lastPresentationTimeUs = bufferInfo.presentationTimeUs;
 
                             encoderExecutor.submit(() ->
-                                    //mediaMuxer.writeSampleData(trackIndex, outputBuffer, bufferInfo));
+                                    pusher.pushFrame(outputBuffer, bufferInfo));
                         } catch (Exception e) {
                             Timber.tag(TAGcodec).e("写入数据失败: %s", e.getMessage());
                         } finally {
@@ -186,18 +204,7 @@ public class VideoPusher {
 
                 @Override
                 public void onOutputFormatChanged(@NonNull MediaCodec codec, @NonNull MediaFormat format) {
-                    if () return;
 
-                    // 确保格式有效
-                    if (!format.containsKey(MediaFormat.KEY_MIME)) {
-                        Timber.tag(TAGcodec).e("无效的媒体格式");
-                        return;
-                    }
-
-                    Timber.tag(TAGcodec).d("Muxer 启动完成");
-                    reportSubject.onNext(new PushReport(
-                            EventType.STARTED, 0,
-                            "录制启动成功"));
                 }
             });
 
@@ -205,32 +212,35 @@ public class VideoPusher {
             inputSurface = videoEncoder.createInputSurface();
             videoEncoder.start(); // 启动编码器但不立即开始录制
 
-            isRecording.set(true);
+            isPushing.set(true);
 
             // 3. 启动录制队列
             //startProcessingQueue();
         } catch (Exception e) {
             Timber.tag(TAGcodec).e(e, "录制初始化失败");
             cleanupResources();
-            reportSubject.onNext(new PushReport(
-                    EventType.ERROR, 0,
-                    "录制初始化失败"));
+            reportError(0,"录制初始化失败");
             throw new RuntimeException("录制初始化失败");
         }
     }
 
-    // 获取编码器参数的示例方法
+    // 获取编码器参数
     private AVCodecParameters getEncoderParameters() {
-        AVCodecParameters params = AVCodecParameters.();
-        params.codec_type(AVMEDIA_TYPE_VIDEO);
-        params.codec_id(AV_CODEC_ID_H264);
-        params.width(width);
-        params.height(height);
-        params.bit_rate(avgBitrate);
-        return params;
+        if (params == null || params.isNull()) {
+            throw new OutOfMemoryError("无法分配 AVCodecParameters 内存");
+        }
+        try {
+            params.codec_type(AVMEDIA_TYPE_VIDEO);
+            params.codec_id(AV_CODEC_ID_H264);
+            params.width(width);
+            params.height(height);
+            params.bit_rate(Bitrate);
+            return params.retainReference(); // 保持引用计数
+        } catch (Exception e) {
+            avcodec_parameters_free(params); // 异常时释放内存
+            throw e;
+        }
     }
-
-
 
     // 检查 Surface 有效性
     public boolean isSurfaceValid() {
@@ -239,7 +249,7 @@ public class VideoPusher {
 
     //Surface的方法
     public Surface getInputSurface() {
-        if (!isRecording.get()) {
+        if (!isPushing.get()) {
             throw new IllegalStateException("录制未开始");
         }
         return inputSurface;
@@ -247,7 +257,7 @@ public class VideoPusher {
 
     public void stopRecording() {
         synchronized (dimensionLock) {
-            if (!isRecording.get()) return;
+            if (!isPushing.get()) return;
 
             try {
                 // 1. 发送编码结束信号（仅Surface模式需要）
@@ -271,7 +281,10 @@ public class VideoPusher {
                     inputSurface.release();
                     inputSurface = null;
                 }
-                isRecording.set(false);
+                if (params != null && !params.isNull()) {
+                    avcodec_parameters_free(params); // 释放参数内存
+                }
+                isPushing.set(false);
             }
         }
     }
@@ -298,7 +311,45 @@ public class VideoPusher {
         }
     }
 
+    private void reportError(int code, String msg)
+    {
+        reportSubject.onNext(new PushReport(
+                EventType.ERROR, code,
+                msg,0,0));
+    }
+
     public PublishSubject<PushReport> getReportSubject() {
         return reportSubject;
+    }
+
+    private void setupEventHandlers() {
+        Disposable disposable = pusher.getReportSubject()
+                .observeOn(AndroidSchedulers.mainThread())
+                .subscribe(report -> {
+                    switch (report.type) {
+                        case PUSH_STARTED:
+                            handlePushStart(report);
+                            break;
+                        case PUSH_STOPPED:
+                            handlePushStop(report);
+                            break;
+                        case CUR_BITRATE:
+                            handleBitrateReport(report);
+                            break;
+                        case ERROR:
+                            handleError(report);
+                            break;
+                        case CONNECTION_ERROR:
+                            handleReconnectError(report);
+                            break;
+                        case NETWORK_DELAY:
+                            handleNetworkDelay(report);
+                            break;
+                        case RECONNECTION_SUCCESS:
+                            handleReconnectionSuccess(report);
+                            break;
+                    }
+                });
+        compositeDisposable.add(disposable);
     }
 }

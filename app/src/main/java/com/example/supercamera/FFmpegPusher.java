@@ -31,6 +31,9 @@ import static org.bytedeco.javacpp.Pointer.*;
 
 import android.media.MediaCodec;
 
+import io.reactivex.rxjava3.android.schedulers.AndroidSchedulers;
+import io.reactivex.rxjava3.disposables.Disposable;
+import io.reactivex.rxjava3.subjects.PublishSubject;
 import timber.log.Timber;
 import java.nio.ByteBuffer;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -45,13 +48,27 @@ public class FFmpegPusher {
     private int width;
     private int height;
     private int fps;
-    private int avgBitrate;
-    private int maxBitrate;
-    private int minBitrate;
+    private int Bitrate;
     private String url;
     private final Object initStopLock = new Object();
+    private final PublishSubject<FFmpegReport> reportSubject = PublishSubject.create();
 
-    // 在FFmpegPusher类中添加
+    public static class FFmpegReport {
+        public final VideoPusher.EventType type;
+        public final int code;
+        public final String message;
+        public final int BitrateNow;
+        public final int rtt;
+
+        public FFmpegReport(VideoPusher.EventType type, int code, String message, int BitrateNow, int rtt) {
+            this.type = type;
+            this.code = code;
+            this.message = message;
+            this.BitrateNow = BitrateNow;
+            this.rtt = rtt;
+        }
+    }
+
     private static String av_err2str(int errcode) {
         BytePointer buffer = new BytePointer(128);
         try {
@@ -67,12 +84,12 @@ public class FFmpegPusher {
 
 
     public FFmpegPusher(String url, int width, int height, int fps,
-                           int avgBitrate) {
+                           int Bitrate) {
             this.url = url;
             this.width = width;
             this.height = height;
             this.fps = fps;
-            this.avgBitrate = avgBitrate;
+            this.Bitrate = Bitrate;
     }
 
     public void initPusher(byte[] header, AVCodecParameters srcParams)
@@ -190,4 +207,7 @@ public class FFmpegPusher {
         return isPushing.get() && outputContext != null;
     }
 
+    public PublishSubject<FFmpegReport> getReportSubject() {
+        return reportSubject;
+    }
 }
