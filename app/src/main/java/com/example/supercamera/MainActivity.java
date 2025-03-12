@@ -360,7 +360,7 @@ public class MainActivity extends AppCompatActivity {
                           int record_height, int record_bitrate, int record_fps,
                       StabilizationMode push_StabilizationMode,
                       StabilizationMode record_StabilizationMode)
-    {//return 0:成功，1：正在推流，2：码率等设置不合规，3：推流出错，4：recordpath生成出错 ，5：录制器 Surface 初始化失败，6：其他错误
+    {//return 0:成功，1：正在推流，2：码率等设置不合规，3：推流出错，4：recordpath生成出错 ，5：Surface 初始化失败，6：其他错误
         synchronized (startStopLock) {
             if (currentState.get() != WorkflowState.READY) {
                 Timber.tag(TAG).e("开始失败，工作流已启动");
@@ -384,29 +384,35 @@ public class MainActivity extends AppCompatActivity {
 
             Timber.tag(TAG).i("正在开启工作流");
             try {
-                // 2. 初始化推流服务
+                // 1.初始化推流服务
                 try {
-                    videoPusher = new VideoPusher(push_Url, push_width, push_height, push_fps, push_initAvgBitrate);
+                    videoPusher = new VideoPusher();
+                    videoPusher.startPush(push_Url, push_width, push_height, push_fps, push_initAvgBitrate);
                 } catch (RuntimeException e) {
                     Timber.tag(TAG).e("推流服务出错：%s", e.getMessage());
                     setState(WorkflowState.ERROR);
                     //Stop();//通过事件总线统一处理
                     return 3;
                 }
-                // 3. 初始化录制服务
+                //检查 push Surface 有效性
+                if (!videoPusher.isSurfaceValid()) {
+                    Timber.tag(TAG).e("推流器 Surface 初始化失败");
+                    return 5;
+                }
+
+                // 2. 初始化录制服务
                 videoRecorder = new VideoRecorder();
                 videoRecorder.startRecording(record_width, record_height, push_fps, record_bitrate, record_Path); // 提前准备
-                // 4. 检查 record Surface 有效性
+                // 检查 record Surface 有效性
                 if (!videoRecorder.isSurfaceValid()) {
                     Timber.tag(TAG).e("录制器 Surface 初始化失败");
                     return 5;
                 }
-                // 5. 启动摄像头
+
+                // 3. 启动摄像头
                 startCamera(push_width, push_height, record_width, record_height, 60,
                         push_StabilizationMode, record_StabilizationMode);
-                // 6. 开始推流
-                videoPusher.startPush(push_Url);
-                // 7. 设置事件处理器
+
                 setupEventHandlers();
                 //开始异步回调
                 checker.onBeforeStart();

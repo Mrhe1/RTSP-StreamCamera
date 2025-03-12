@@ -51,23 +51,7 @@ public class FFmpegPusher {
     private int Bitrate;
     private String url;
     private final Object initStopLock = new Object();
-    private final PublishSubject<FFmpegReport> reportSubject = PublishSubject.create();
-
-    public static class FFmpegReport {
-        public final VideoPusher.EventType type;
-        public final int code;
-        public final String message;
-        public final int BitrateNow;
-        public final int rtt;
-
-        public FFmpegReport(VideoPusher.EventType type, int code, String message, int BitrateNow, int rtt) {
-            this.type = type;
-            this.code = code;
-            this.message = message;
-            this.BitrateNow = BitrateNow;
-            this.rtt = rtt;
-        }
-    }
+    private final PublishSubject<VideoPusher.PushReport> reportSubject = PublishSubject.create();
 
     private static String av_err2str(int errcode) {
         BytePointer buffer = new BytePointer(128);
@@ -207,7 +191,7 @@ public class FFmpegPusher {
         return isPushing.get() && outputContext != null;
     }
 
-    public PublishSubject<FFmpegReport> getReportSubject() {
+    public PublishSubject<VideoPusher.PushReport> getReportSubject() {
         return reportSubject;
     }
 }

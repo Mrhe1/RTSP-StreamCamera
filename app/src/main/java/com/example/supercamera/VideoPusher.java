@@ -19,9 +19,9 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import io.reactivex.rxjava3.android.schedulers.AndroidSchedulers;
 import io.reactivex.rxjava3.disposables.CompositeDisposable;
 import io.reactivex.rxjava3.disposables.Disposable;
+import io.reactivex.rxjava3.schedulers.Schedulers;
 import io.reactivex.rxjava3.subjects.PublishSubject;
 import timber.log.Timber;
 
@@ -74,8 +74,8 @@ public class VideoPusher {
         }
     }
 
-    public VideoPusher(String url, int width, int height, int fps,
-                         int Bitrate)
+    public void startPush(String url, int width, int height, int fps,
+                          int Bitrate)
     {
         this.width = width;
         this.height = height;
@@ -84,11 +84,18 @@ public class VideoPusher {
 
         pusher = new FFmpegPusher(url, width, height, fps, Bitrate);
         startStreamEncoder(width, height, fps, Bitrate);
+
+        setupEventHandlers();
     }
 
     public void stopPush() {
         pusher.stopPush();
-        stopRecording();
+        stopEncoding();
+
+        //释放RxJava资源
+        if (compositeDisposable != null && !compositeDisposable.isDisposed()) {
+            compositeDisposable.dispose();
+        }
     }
 
     private void startStreamEncoder(int width, int height, int fps, int bitrate) {
@@ -214,13 +221,11 @@ public class VideoPusher {
 
             isPushing.set(true);
 
-            // 3. 启动录制队列
-            //startProcessingQueue();
         } catch (Exception e) {
-            Timber.tag(TAGcodec).e(e, "录制初始化失败");
+            Timber.tag(TAGcodec).e(e, "推流编码器初始化失败");
             cleanupResources();
-            reportError(0,"录制初始化失败");
-            throw new RuntimeException("录制初始化失败");
+            reportError(0,"推流编码器初始化失败");
+            throw new RuntimeException("推流编码器初始化失败");
         }
     }
 
@@ -255,7 +260,7 @@ public class VideoPusher {
         return inputSurface;
     }
 
-    public void stopRecording() {
+    public void stopEncoding() {
         synchronized (dimensionLock) {
             if (!isPushing.get()) return;
 
@@ -324,31 +329,9 @@ public class VideoPusher {
 
     private void setupEventHandlers() {
         Disposable disposable = pusher.getReportSubject()
-                .observeOn(AndroidSchedulers.mainThread())
+                .observeOn(Schedulers.io())
                 .subscribe(report -> {
-                    switch (report.type) {
-                        case PUSH_STARTED:
-                            handlePushStart(report);
-                            break;
-                        case PUSH_STOPPED:
-                            handlePushStop(report);
-                            break;
-                        case CUR_BITRATE:
-                            handleBitrateReport(report);
-                            break;
-                        case ERROR:
-                            handleError(report);
-                            break;
-                        case CONNECTION_ERROR:
-                            handleReconnectError(report);
-                            break;
-                        case NETWORK_DELAY:
-                            handleNetworkDelay(report);
-                            break;
-                        case RECONNECTION_SUCCESS:
-                            handleReconnectionSuccess(report);
-                            break;
-                    }
+                    reportSubject.onNext(report);
                 });
         compositeDisposable.add(disposable);
     }
