@@ -77,6 +77,7 @@ dependencies {
     implementation "androidx.camera:camera-view:${camerax_version}"
     implementation "androidx.camera:camera-video:${camerax_version}"
     implementation "com.google.guava:guava:31.0.1-android"
+    implementation 'com.github.stealthcopter:AndroidNetworkTools:0.4.5.3'
     //implementation 'org.bytedeco:javacpp-platform:1.5.10'
     //implementation 'org.bytedeco:javacv-platform:1.5.10'
     //implementation 'org.bytedeco:ffmpeg-platform:6.1.1-1.5.10'

@@ -1,12 +1,10 @@
 package com.example.supercamera;
 
-import org.bytedeco.javacpp.*;
 import org.bytedeco.ffmpeg.avcodec.*;
 import org.bytedeco.ffmpeg.avformat.*;
 import org.bytedeco.ffmpeg.avutil.*;
 import org.bytedeco.javacpp.BytePointer;
 
-import static org.bytedeco.ffmpeg.global.avcodec.AV_CODEC_ID_H264;
 import static org.bytedeco.ffmpeg.global.avcodec.AV_PKT_FLAG_KEY;
 import static org.bytedeco.ffmpeg.global.avcodec.av_packet_alloc;
 import static org.bytedeco.ffmpeg.global.avcodec.av_packet_unref;
@@ -23,20 +21,25 @@ import static org.bytedeco.ffmpeg.global.avformat.avformat_new_stream;
 import static org.bytedeco.ffmpeg.global.avformat.avformat_write_header;
 import static org.bytedeco.ffmpeg.global.avformat.avio_closep;
 import static org.bytedeco.ffmpeg.global.avformat.avio_open;
-import static org.bytedeco.ffmpeg.global.avutil.AVMEDIA_TYPE_VIDEO;
 import static org.bytedeco.ffmpeg.global.avutil.av_dict_set;
 import static org.bytedeco.ffmpeg.global.avutil.av_rescale_q;
 import static org.bytedeco.ffmpeg.global.avutil.av_strerror;
-import static org.bytedeco.javacpp.Pointer.*;
 
 import android.media.MediaCodec;
 
-import io.reactivex.rxjava3.android.schedulers.AndroidSchedulers;
-import io.reactivex.rxjava3.disposables.Disposable;
 import io.reactivex.rxjava3.subjects.PublishSubject;
 import timber.log.Timber;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
+import com.stealthcopter.networktools.Ping;
+import com.stealthcopter.networktools.ping.PingStats;
+
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 // 新增FFmpeg推流器类
 public class FFmpegPusher {
@@ -45,13 +48,120 @@ public class FFmpegPusher {
     private AVStream videoStream;
     private long startTimeUs;
     private final AtomicBoolean isPushing = new AtomicBoolean(false);
-    private int width;
-    private int height;
-    private int fps;
-    private int Bitrate;
-    private String url;
+    private final int width;
+    private final int height;
+    private final int fps;
+    private final int Bitrate;
+    private final String url;
     private final Object initStopLock = new Object();
+    private PushStatistics statistics;
     private final PublishSubject<VideoPusher.PushReport> reportSubject = PublishSubject.create();
+
+    public class PushStatistics{
+        List<FrameInfo> frameList = Collections.synchronizedList(new ArrayList<>());
+        private int rtt;
+        private PingHelper pingHelper;
+        private ScheduledExecutorService executor;
+
+        public final class FrameInfo {
+            private final boolean isPushFrameSuccess;
+            private final int frameSize;
+            //private int rtt;
+            public FrameInfo(boolean isPushFrameSuccess, int frameSize) {
+                this.isPushFrameSuccess = isPushFrameSuccess;
+                this.frameSize = frameSize;
+                //this.rtt = rtt;
+            }
+
+            public boolean getIfPushFrameSuccess() {
+                return isPushFrameSuccess;
+            }
+
+            public int getFrameSize() {
+                return frameSize;
+            }
+
+            //public int getRtt() {
+                //return rtt;
+            //}
+        }
+
+        public class PingHelper {
+            private ScheduledExecutorService pingExecutor;
+
+            // 开始定时 Ping
+            public void startPeriodicPing(String host, int intervalSeconds) {
+                pingExecutor = Executors.newSingleThreadScheduledExecutor();
+                pingExecutor.scheduleWithFixedDelay(() -> doPing(host), intervalSeconds, intervalSeconds, TimeUnit.SECONDS);
+            }
+
+            // 停止 Ping
+            public void stopPeriodicPing() {
+                if (pingExecutor != null) {
+                    pingExecutor.shutdown();
+                }
+            }
+
+            // 执行单次 Ping
+            private void doPing(String host) {
+                Ping.onAddress(host).setTimeOutMillis(1000).doPing(new Ping.PingListener() {
+                    @Override
+                    public void onResult(com.stealthcopter.networktools.ping.PingResult pingResult) {
+                        if(pingResult.isReachable){
+                            rtt = (int)Math.round(pingResult.timeTaken);
+                            Timber.tag(TAG).i("ping成功，rtt：%d", rtt);
+                        }else{
+                            rtt = -1;
+                            Timber.tag(TAG).e("ping失败");
+                        }
+                    }
+
+                    @Override
+                    public void onFinished(PingStats pingStats) {
+
+                    }
+
+                    @Override
+                    public void onError(Exception e) {
+                        rtt = -1;
+                        Timber.tag(TAG).e("ping失败");
+                    }
+                });
+            }
+        }
+
+        public void startPushStatistics(int intervalSeconds,
+                                        int pingIntervalSeconds, String url){
+            String host = "";
+
+            executor = Executors.newSingleThreadScheduledExecutor();
+            executor.scheduleWithFixedDelay(() -> reportPushStatistics(), intervalSeconds, intervalSeconds, TimeUnit.SECONDS);
+
+            pingHelper = new PingHelper();
+            pingHelper.startPeriodicPing(host, pingIntervalSeconds);
+        }
+
+        public void stopPushStatistics()
+        {
+            //停止ping
+            pingHelper.stopPeriodicPing();
+
+            //停止report
+            if (executor != null) {
+                executor.shutdown();
+            }
+        }
+
+        public void setPushStatistics(boolean isSuccess, int size){
+            frameList.add(new FrameInfo(isSuccess, size));
+        }
+
+        private void  reportPushStatistics(){
+
+        }
+
+
+    }
 
     private static String av_err2str(int errcode) {
         BytePointer buffer = new BytePointer(128);
@@ -124,6 +234,10 @@ public class FFmpegPusher {
                     throw new RuntimeException("写头失败: " + av_err2str(ret));
                 }
 
+                // 7. 开始统计帧数据
+                statistics = new PushStatistics();
+                statistics.startPushStatistics(2, 4, url);
+
                 isPushing.set(true);
             } catch (Exception e) {
                 cleanup();
@@ -136,6 +250,8 @@ public class FFmpegPusher {
         if (!isPushing.get() || (bufferInfo.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
             return;
         }
+
+        boolean isSuccess = true;
 
         // 创建足够大的BytePointer
         BytePointer nativeBuffer = new BytePointer(bufferInfo.size);
@@ -162,15 +278,21 @@ public class FFmpegPusher {
 
         int ret = av_interleaved_write_frame(outputContext, pkt);
         if (ret < 0) {
+            isSuccess = false;
             Timber.tag(TAG).e("帧写入失败: %d", ret);
         }
         // 在packet释放后需要手动释放内存
         av_packet_unref(pkt);
         nativeBuffer.deallocate();
+
+        statistics.setPushStatistics(isSuccess, bufferInfo.size);
     }
 
     public void stopPush() {
         synchronized (initStopLock) {
+            // 停止统计
+            statistics.stopPushStatistics();
+
             if (isPushing.compareAndSet(true, false)) {
                 av_write_trailer(outputContext);
                 cleanup();
