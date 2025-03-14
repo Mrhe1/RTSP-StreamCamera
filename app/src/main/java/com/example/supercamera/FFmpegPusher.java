@@ -40,6 +40,8 @@ import com.stealthcopter.networktools.ping.PingStats;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 // 新增FFmpeg推流器类
 public class FFmpegPusher {
@@ -132,7 +134,16 @@ public class FFmpegPusher {
 
         public void startPushStatistics(int intervalSeconds,
                                         int pingIntervalSeconds, String url){
-            String host = "";
+            // 获取host地址
+            String host = null;
+            Pattern pattern = Pattern.compile("^rtsp://([^:/]+)");
+            Matcher matcher = pattern.matcher(url);
+            if (matcher.find()) {
+                host = matcher.group(1);
+            } else {
+                Timber.tag(TAG).e("rtsp地址无法解析");
+                throw new RuntimeException ("rtsp地址无法解析");
+            }
 
             executor = Executors.newSingleThreadScheduledExecutor();
             executor.scheduleWithFixedDelay(() -> reportPushStatistics(), intervalSeconds, intervalSeconds, TimeUnit.SECONDS);
@@ -247,7 +258,8 @@ public class FFmpegPusher {
     }
 
     public void pushFrame(ByteBuffer data, MediaCodec.BufferInfo bufferInfo) {
-        if (!isPushing.get() || (bufferInfo.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
+        if (VideoPusher.currentState.get() == VideoPusher.PushState.PUSHING
+                || (bufferInfo.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
             return;
         }
 
@@ -307,10 +319,6 @@ public class FFmpegPusher {
             }
             avformat_free_context(outputContext);
         }
-    }
-
-    public boolean isInitialized() {
-        return isPushing.get() && outputContext != null;
     }
 
     public PublishSubject<VideoPusher.PushReport> getReportSubject() {

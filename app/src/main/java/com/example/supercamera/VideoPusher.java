@@ -18,6 +18,7 @@ import java.nio.ByteBuffer;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import io.reactivex.rxjava3.disposables.CompositeDisposable;
 import io.reactivex.rxjava3.disposables.Disposable;
@@ -27,7 +28,6 @@ import timber.log.Timber;
 
 public class VideoPusher {
     private MediaCodec videoEncoder;
-    private int trackIndex;
     private static final String TAGcodec = "StreamEncoder";
     private static final String TAG = "VideoPusher";
     public final AtomicBoolean isPushing = new AtomicBoolean(false);
@@ -44,6 +44,17 @@ public class VideoPusher {
     private final PublishSubject<PushReport> reportSubject = PublishSubject.create();
     private AVCodecParameters params = avcodec_parameters_alloc();
     private CompositeDisposable compositeDisposable;
+    public enum PushState {
+        READY,
+        PUSHING,
+        ERROR,
+        RECONNECTING,
+        STARTING,
+        STOPPING
+    }
+
+    public static final AtomicReference<PushState> currentState =
+            new AtomicReference<>(PushState.READY);
 
     // 事件类型定义
     public enum EventType {
@@ -74,21 +85,66 @@ public class VideoPusher {
         }
     }
 
-    public void startPush(String url, int width, int height, int fps,
-                          int Bitrate)
-    {
+    // 处理工作状态转换
+    public static boolean setState(PushState newState) {
+        // 状态校验
+        if (!isValidTransition(newState)) {
+            Timber.tag(TAG).w("非法状态转换: %s → %s",
+                    currentState.get(), newState);
+            return false;
+        }
+        return currentState.compareAndSet(currentState.get(), newState);
+    }
+
+    private static boolean isValidTransition(PushState newState) {
+        // 实现状态转换规则校验
+        PushState current = currentState.get();
+        switch (current) {
+            case READY: return newState == PushState.STARTING;
+            case STARTING: return newState == PushState.PUSHING || newState == PushState.ERROR;
+            case PUSHING: return newState == PushState.ERROR || newState == PushState.STARTING
+                    || newState == PushState.RECONNECTING;
+            case RECONNECTING: return newState == PushState.ERROR || newState == PushState.PUSHING;
+            case ERROR: return newState == PushState.STOPPING;
+            default: return false;
+        }
+    }
+
+    public VideoPusher(String url, int width, int height, int fps,
+                       int Bitrate){
         this.width = width;
         this.height = height;
         this.fps = fps;
         this.Bitrate = Bitrate;
 
         pusher = new FFmpegPusher(url, width, height, fps, Bitrate);
-        startStreamEncoder(width, height, fps, Bitrate);
 
-        setupEventHandlers();
+        setState(PushState.READY);
+    }
+
+    public void startPush()
+    {
+        if(!setState(PushState.STARTING)){
+            Timber.tag(TAG).e("状态不对，无法开始推流");
+            return;
+        }
+
+        try {
+            startStreamEncoder(width, height, fps, Bitrate);
+            setupEventHandlers();// 接收ffmpegPusher的消息队列
+        } catch (RuntimeException e) {
+            setState(PushState.ERROR);
+            Timber.tag(TAG).e("推流编码器初始化失败");
+            reportError(0,"推流编码器初始化失败");
+        }
     }
 
     public void stopPush() {
+        if(!setState(PushState.STOPPING)){
+            Timber.tag(TAG).e("无需重复停止推流");
+            return;
+        }
+
         pusher.stopPush();
         stopEncoding();
 
@@ -96,6 +152,8 @@ public class VideoPusher {
         if (compositeDisposable != null && !compositeDisposable.isDisposed()) {
             compositeDisposable.dispose();
         }
+
+        setState(PushState.READY);
     }
 
     private void startStreamEncoder(int width, int height, int fps, int bitrate) {
@@ -146,8 +204,6 @@ public class VideoPusher {
 
             //异步回调
             videoEncoder.setCallback(new MediaCodec.Callback() {
-                private volatile boolean muxerStarted = false;
-
                 @Override
                 public void onInputBufferAvailable(MediaCodec mc, int inputBufferId) {
                     // Surface模式无需处理输入缓冲区
@@ -176,12 +232,18 @@ public class VideoPusher {
                             try {
                                 AVCodecParameters prt = getEncoderParameters();
                                 // 初始化推流器（确保只执行一次）
-                                if (!pusher.isInitialized()) {
+                                if (currentState.get() == PushState.STARTING) {
                                     pusher.initPusher(configData, prt);
                                 }
                             } catch (Exception e) {
-                                Timber.tag(TAG).e("ffmpeg初始化失败:%s",e.getMessage());
+                                String msg = String.format("ffmpeg初始化失败:%s",e.getMessage());
+                                Timber.tag(TAG).e(msg);
+                                setState(PushState.ERROR);
+                                stopPush();
+                                reportError(0,msg);
                             }
+
+                            if(currentState.get() == PushState.STARTING) setState(PushState.PUSHING);
                             mc.releaseOutputBuffer(outputBufferId, false);
                             return;
                         }
@@ -224,7 +286,6 @@ public class VideoPusher {
         } catch (Exception e) {
             Timber.tag(TAGcodec).e(e, "推流编码器初始化失败");
             cleanupResources();
-            reportError(0,"推流编码器初始化失败");
             throw new RuntimeException("推流编码器初始化失败");
         }
     }

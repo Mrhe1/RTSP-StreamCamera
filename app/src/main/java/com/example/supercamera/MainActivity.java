@@ -23,6 +23,7 @@ import android.util.Size;
 import java.util.ArrayList;
 import java.util.Arrays;
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
@@ -362,11 +363,10 @@ public class MainActivity extends AppCompatActivity {
                       StabilizationMode record_StabilizationMode)
     {//return 0:成功，1：正在推流，2：码率等设置不合规，3：推流出错，4：recordpath生成出错 ，5：Surface 初始化失败，6：其他错误
         synchronized (startStopLock) {
-            if (currentState.get() != WorkflowState.READY) {
+            if (!setState(WorkflowState.STARTING)) {
                 Timber.tag(TAG).e("开始失败，工作流已启动");
                 return 1;
             }
-            setState(WorkflowState.STARTING);
 
             //验证push码率设置是否正确
             if (push_initMaxBitrate < push_initAvgBitrate || push_initMinBitrate > push_initAvgBitrate) {
@@ -386,8 +386,8 @@ public class MainActivity extends AppCompatActivity {
             try {
                 // 1.初始化推流服务
                 try {
-                    videoPusher = new VideoPusher();
-                    videoPusher.startPush(push_Url, push_width, push_height, push_fps, push_initAvgBitrate);
+                    videoPusher = new VideoPusher(push_Url, push_width, push_height, push_fps, push_initAvgBitrate);
+                    videoPusher.startPush();
                 } catch (RuntimeException e) {
                     Timber.tag(TAG).e("推流服务出错：%s", e.getMessage());
                     setState(WorkflowState.ERROR);
@@ -429,11 +429,11 @@ public class MainActivity extends AppCompatActivity {
 
     public boolean Stop() {
         synchronized (startStopLock) {
-            if (currentState.get() != WorkflowState.WORKING && currentState.get() != WorkflowState.ERROR) {
+            if (!setState(WorkflowState.STOPPING)) {
                 Timber.tag(TAG).i("无需重复停止");
                 return true;
             }
-            setState(WorkflowState.STOPPING);
+
             try {
                 // 1. 停止推流
                 if (videoPusher != null) {
@@ -579,17 +579,7 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
             if (exactRange != null) return exactRange;
 
             // 第二阶段：选择包含目标帧率的最佳范围
-            Range<Integer> bestDynamicRange = null;
-            for (Range<Integer> range : availableRanges) {
-                if (range.getUpper() >= targetFps && range.getLower() <= targetFps) {
-                    if (bestDynamicRange == null
-                            || (range.getUpper() > bestDynamicRange.getUpper()) // 优先更高上限
-                            || (range.getUpper() == bestDynamicRange.getUpper()
-                            && range.getLower() > bestDynamicRange.getLower())) { // 次优先更高下限
-                        bestDynamicRange = range;
-                    }
-                }
-            }
+            Range<Integer> bestDynamicRange = getIntegerRange(targetFps, availableRanges);
             if (bestDynamicRange != null) return bestDynamicRange;
 
             // 第三阶段：降级选择最低可用帧率
@@ -602,6 +592,22 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
             handleCameraError(ERROR_CAMERA_SERVICE);
             return new Range<>(30, 30); // 默认安全值
         }
+    }
+
+    @Nullable
+    private static Range<Integer> getIntegerRange(int targetFps, Range<Integer>[] availableRanges) {
+        Range<Integer> bestDynamicRange = null;
+        for (Range<Integer> range : availableRanges) {
+            if (range.getUpper() >= targetFps && range.getLower() <= targetFps) {
+                if (bestDynamicRange == null
+                        || (range.getUpper() > bestDynamicRange.getUpper()) // 优先更高上限
+                        || (range.getUpper() == bestDynamicRange.getUpper()
+                        && range.getLower() > bestDynamicRange.getLower())) { // 次优先更高下限
+                    bestDynamicRange = range;
+                }
+            }
+        }
+        return bestDynamicRange;
     }
 
 
@@ -1188,11 +1194,6 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
     protected void onPause() {
         super.onPause();
         Stop();
-    }
-
-    @Override
-    protected void onResume() {
-        super.onResume();
     }
 
     @Override

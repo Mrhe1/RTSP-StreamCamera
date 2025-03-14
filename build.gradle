@@ -6,7 +6,7 @@ buildscript {
     //}
     dependencies {
         //classpath "com.android.tools.build:gradle:7.4.2" // Android Gradle Plugin
-        classpath 'com.android.tools.build:gradle:7.2.1' // 最新的 Android Gradle 插件版本
+        classpath 'com.android.tools.build:gradle:7.2.2' // 最新的 Android Gradle 插件版本
         classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.6.10' // Kotlin 插件
     }
 }
@@ -16,7 +16,7 @@ plugins {
 }
 
 allprojects {
-    configurations.all {
+    configurations.configureEach {
         resolutionStrategy {
             force 'androidx.annotation:annotation-jvm:1.9.1'
             force 'androidx.annotation:annotation:1.9.0'
