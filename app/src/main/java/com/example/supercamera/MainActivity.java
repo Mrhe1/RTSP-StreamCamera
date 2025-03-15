@@ -1025,20 +1025,14 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
                         case PUSH_STOPPED:
                             handlePushStop(report);
                             break;
-                        case CUR_BITRATE:
-                            handleBitrateReport(report);
-                            break;
                         case ERROR:
                             handleError(report);
                             break;
-                        case CONNECTION_ERROR:
-                            handleReconnectError(report);
-                            break;
-                        case NETWORK_DELAY:
+                        case Statistics:
                             handleNetworkDelay(report);
                             break;
-                        case RECONNECTION_SUCCESS:
-                            handleReconnectionSuccess(report);
+                        case RECONNECTION:
+                            handleReconnection(report);
                             break;
                     }
                 });
@@ -1074,22 +1068,6 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
         Timber.tag(TAG).i(report.message);
     }
 
-    private void handleNetworkPoor(VideoPusher.PushReport report) {
-        Timber.tag(TAG).i("网络质量差");
-    }
-
-    private void handleNetworkRecovery(VideoPusher.PushReport report) {
-        Timber.tag(TAG).i("网络恢复");
-    }
-
-    private void handleBitrateReport(VideoPusher.PushReport report) {
-        int initialAvg = report.avgBitrate;
-        int initialMax = report.maxBitrate;
-        int initialMin = report.minBitrate;
-        Timber.tag(TAG).i("码率报告：平均码率：%dkbps,最大码率:%dbps,最小码率:%dbps"
-                ,initialAvg,initialMax,initialMin);
-    }
-
     private void handleError(VideoPusher.PushReport report) {
         String errormsg = report.message;
         int errorcode = report.code;
@@ -1099,24 +1077,12 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
         Stop();
     }
 
-    private void handleReconnectError(VideoPusher.PushReport report) {
+    private void handleReconnection(VideoPusher.PushReport report) {
         Timber.tag(TAG).e("重连异常");
-    }
-
-    private void handlePusherDestroy(VideoPusher.PushReport report) {
-        Timber.tag(TAG).i("推流引擎已销毁");
     }
 
     private void handleNetworkDelay(VideoPusher.PushReport report) {
         Timber.tag(TAG).i("网络延迟rtt：%dms",report.code);
-    }
-
-    private void handleUrlChange(VideoPusher.PushReport report) {
-        Timber.tag(TAG).i("推流改变，url：%s",report.message);
-    }
-
-    private void handleReconnectionSuccess(VideoPusher.PushReport report) {
-        Timber.tag(TAG).e("重连成功");
     }
 
     private void handleRecordError(VideoRecorder.RecordReport report)
@@ -1149,11 +1115,7 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
     public static String generateUniqueFileName(Context context) {
         // 获取DCIM目录下的自定义文件夹
         File recordsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM);
-        //File recordsDir = new File(dcimDir, "SuperRecords");
-        //if (!recordsDir.exists() && !recordsDir.mkdirs()) {
-            //Timber.e("创建目录失败");
-            //return null;
-        //}
+
         //获取当前日期字符串
         SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd", Locale.CHINA);
         String dateStr = dateFormat.format(new Date());

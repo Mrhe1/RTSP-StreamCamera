@@ -43,7 +43,7 @@ public class VideoPusher {
     private final AtomicBoolean isInitializing = new AtomicBoolean(false);
     private final PublishSubject<PushReport> reportSubject = PublishSubject.create();
     private AVCodecParameters params = avcodec_parameters_alloc();
-    private CompositeDisposable compositeDisposable;
+    private final CompositeDisposable compositeDisposable = new CompositeDisposable();
     public enum PushState {
         READY,
         PUSHING,
@@ -59,13 +59,10 @@ public class VideoPusher {
     // 事件类型定义
     public enum EventType {
         ERROR,
-        CUR_BITRATE,
         PUSH_STARTED,
         PUSH_STOPPED,
-        CONNECTION_ERROR,//重连错误
-        //PACKETSLOST,
-        NETWORK_DELAY,//网络往返延时（ms）:RTT
-        RECONNECTION_SUCCESS//重连成功
+        Statistics,//统计回调
+        RECONNECTION//重连相关
     }
 
     // 事件报告类
@@ -75,13 +72,16 @@ public class VideoPusher {
         public final String message;
         public final int BitrateNow;
         public final int rtt;
+        public final double pushFailureRate;
 
-        public PushReport(EventType type, int code, String message, int BitrateNow, int rtt) {
+        public PushReport(EventType type, int code, String message,
+                          int BitrateNow, int rtt, double pushFailureRate) {
             this.type = type;
             this.code = code;
             this.message = message;
             this.BitrateNow = BitrateNow;
             this.rtt = rtt;
+            this.pushFailureRate = pushFailureRate;
         }
     }
 
@@ -99,15 +99,16 @@ public class VideoPusher {
     private static boolean isValidTransition(PushState newState) {
         // 实现状态转换规则校验
         PushState current = currentState.get();
-        switch (current) {
-            case READY: return newState == PushState.STARTING;
-            case STARTING: return newState == PushState.PUSHING || newState == PushState.ERROR;
-            case PUSHING: return newState == PushState.ERROR || newState == PushState.STARTING
+        return switch (current) {
+            case READY -> newState == PushState.STARTING;
+            case STARTING -> newState == PushState.PUSHING || newState == PushState.ERROR;
+            case PUSHING -> newState == PushState.ERROR || newState == PushState.STARTING
                     || newState == PushState.RECONNECTING;
-            case RECONNECTING: return newState == PushState.ERROR || newState == PushState.PUSHING;
-            case ERROR: return newState == PushState.STOPPING;
-            default: return false;
-        }
+            case RECONNECTING -> newState == PushState.ERROR || newState == PushState.PUSHING
+            || newState == PushState.STOPPING;
+            case ERROR -> newState == PushState.STOPPING;
+            default -> false;
+        };
     }
 
     public VideoPusher(String url, int width, int height, int fps,
@@ -149,13 +150,15 @@ public class VideoPusher {
         stopEncoding();
 
         //释放RxJava资源
-        if (compositeDisposable != null && !compositeDisposable.isDisposed()) {
+        if (!compositeDisposable.isDisposed()) {
             compositeDisposable.dispose();
         }
 
         setState(PushState.READY);
     }
 
+    //////////////////////////////////////////////////////////////////////////////////
+                             //!%编码部分%！//
     private void startStreamEncoder(int width, int height, int fps, int bitrate) {
         if (isInitializing.get()) return;
         isInitializing.set(true);
@@ -205,13 +208,13 @@ public class VideoPusher {
             //异步回调
             videoEncoder.setCallback(new MediaCodec.Callback() {
                 @Override
-                public void onInputBufferAvailable(MediaCodec mc, int inputBufferId) {
+                public void onInputBufferAvailable(@NonNull MediaCodec mc, int inputBufferId) {
                     // Surface模式无需处理输入缓冲区
                 }
 
                 @Override
-                public void onOutputBufferAvailable(MediaCodec mc, int outputBufferId,
-                                                    MediaCodec.BufferInfo bufferInfo) {
+                public void onOutputBufferAvailable(@NonNull MediaCodec mc, int outputBufferId,
+                                                    @NonNull MediaCodec.BufferInfo bufferInfo) {
                     synchronized (dimensionLock) {
                         if (!isPushing.get()) return;
 
@@ -377,11 +380,14 @@ public class VideoPusher {
         }
     }
 
+    //////////////////////////////////////////////////////////////////////////////////
+                            //!%消息队列%！//
+
     private void reportError(int code, String msg)
     {
         reportSubject.onNext(new PushReport(
                 EventType.ERROR, code,
-                msg,0,0));
+                msg,0,0, 0));
     }
 
     public PublishSubject<PushReport> getReportSubject() {
@@ -392,7 +398,9 @@ public class VideoPusher {
         Disposable disposable = pusher.getReportSubject()
                 .observeOn(Schedulers.io())
                 .subscribe(report -> {
-                    reportSubject.onNext(report);
+                    reportSubject.onNext(new PushReport(report.type,report.code
+                    ,"FFmpegPusher:" + report.message, report.BitrateNow,
+                            report.rtt, report.pushFailureRate));
                 });
         compositeDisposable.add(disposable);
     }
