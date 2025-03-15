@@ -238,6 +238,12 @@ public class VideoPusher {
                                 if (currentState.get() == PushState.STARTING) {
                                     pusher.initPusher(configData, prt);
                                 }
+
+                                setState(PushState.PUSHING);
+                                reportSubject.onNext(new PushReport(
+                                        EventType.PUSH_STARTED,
+                                        0,"推流开始成功", 0,
+                                        0,0));
                             } catch (Exception e) {
                                 String msg = String.format("ffmpeg初始化失败:%s",e.getMessage());
                                 Timber.tag(TAG).e(msg);
@@ -318,8 +324,9 @@ public class VideoPusher {
 
     //Surface的方法
     public Surface getInputSurface() {
-        if (!isPushing.get()) {
-            throw new IllegalStateException("录制未开始");
+        if (currentState.get() != PushState.STARTING &&
+        currentState.get() != PushState.PUSHING) {
+            throw new IllegalStateException("推流未开始");
         }
         return inputSurface;
     }

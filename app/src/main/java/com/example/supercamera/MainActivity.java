@@ -709,29 +709,14 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
                 surfaces.add(previewSurface);
             }
 
-            // 推流Surface (ImageReader)
-             streamingReader = ImageReader.newInstance(
-                    pushWidth, pushHeight, ImageFormat.YUV_420_888, 3);
-            surfaces.add(streamingReader.getSurface());
-
-            // 设置图像可用监听器
-            streamingReader.setOnImageAvailableListener(reader -> {
-                try (Image image = reader.acquireLatestImage()) { // 使用try-with-resources确保自动关闭
-                    if (image != null && videoPusher != null) {
-                        try {
-                            byte[] yuvData = YUVConverter.convertYUV420888ToYUV420P(image);
-                            if (yuvData != null) { // 添加空校验
-                                videoPusher.getStreamingQueue().onNext(yuvData);
-                            }
-                        } catch (IllegalArgumentException e) {
-                            Timber.tag(TAGCamera).e(e, "帧格式转换出错");
-                        }
-                    }
-                } catch (Exception e) {
-                    Timber.tag(TAGCamera).e(e, "图像处理异常");
-                }
-            }, streamingHandler);
-
+            // 推流Surface
+            try {
+                Surface pushSurface = videoPusher.getInputSurface();
+                surfaces.add(pushSurface);
+            } catch (IllegalStateException e) {
+                handleCameraError(SURFACE_TIMEOUT);
+                return;
+            }
 
             // 录制Surface
             try {
@@ -1054,13 +1039,7 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
     }
 
     private void handlePushStart(VideoPusher.PushReport report) {
-        int initialAvg = report.avgBitrate;
-        int initialMax = report.maxBitrate;
-        int initialMin = report.minBitrate;
-        String url = report.message;
-        Timber.tag(TAG).i("推流已开始,平均码率：%dkbps,最大码率:%dbps,最小码率:%dbps.推流url%s"
-        ,initialAvg,initialMax,initialMin,url);
-
+        Timber.tag(TAG).i("推流已开始");
         checker.onStarted(onStartedCheck.StartPart.PUSH, true);
     }
 
@@ -1078,11 +1057,11 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
     }
 
     private void handleReconnection(VideoPusher.PushReport report) {
-        Timber.tag(TAG).e("重连异常");
+        Timber.tag(TAG).e(report.message);
     }
 
     private void handleNetworkDelay(VideoPusher.PushReport report) {
-        Timber.tag(TAG).i("网络延迟rtt：%dms",report.code);
+        Timber.tag(TAG).i("网络延迟rtt：%dms",report.rtt);
     }
 
     private void handleRecordError(VideoRecorder.RecordReport report)
