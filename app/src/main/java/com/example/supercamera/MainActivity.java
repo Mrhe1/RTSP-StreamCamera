@@ -2,7 +2,6 @@ package com.example.supercamera;
 
 import android.content.Context;
 import android.content.pm.PackageManager;
-import android.graphics.ImageFormat;
 import android.graphics.SurfaceTexture;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
@@ -11,7 +10,6 @@ import android.hardware.camera2.CameraDevice;
 import android.hardware.camera2.CameraManager;
 import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.params.StreamConfigurationMap;
-import android.media.Image;
 import android.media.ImageReader;
 import android.os.Bundle;
 import android.os.Environment;
@@ -68,12 +66,12 @@ public class MainActivity extends AppCompatActivity {
     }
 
     public final onStartedCheck checker = new onStartedCheck();
-    private final AtomicReference<StabilizationMode> nowPushStabMode =
+    private final AtomicReference<StabilizationMode> currentPushStabMode =
             new AtomicReference<>(StabilizationMode.OFF);
-    private final AtomicReference<StabilizationMode> nowRecordStabMode =
+    private final AtomicReference<StabilizationMode> currentRecordStabMode =
             new AtomicReference<>(StabilizationMode.OFF);
-    private final AtomicInteger Now_Push_fps = new AtomicInteger(-1);
-    private final AtomicInteger Now_Record_fps = new AtomicInteger(-1);
+    private final AtomicInteger currentPushFps = new AtomicInteger(-1);
+    private final AtomicInteger currentRecordFps = new AtomicInteger(-1);
 
     public enum WorkflowState {
         IDLE,             // 初始状态
@@ -122,7 +120,7 @@ public class MainActivity extends AppCompatActivity {
 
     public class onStartedCheck{
         private AtomicIntegerArray isStarted = new AtomicIntegerArray(3);
-        private static final int TIMEOUT_MILLISECONDS = 142500;
+        private static final int TIMEOUT_MILLISECONDS = 3000;
         private ScheduledExecutorService timeoutScheduler;
         public enum StartPart {
             CAMERA(0),
@@ -159,6 +157,7 @@ public class MainActivity extends AppCompatActivity {
                 timeoutScheduler.shutdownNow();
                 setState(WorkflowState.WORKING);
                 updateButtonState();
+                onStartReport();// 报告最终摄像头配置
             }
         }
 
@@ -295,7 +294,7 @@ public class MainActivity extends AppCompatActivity {
         int record_height = 1080;
         int record_bitrate = 2000;//单位kbps
         int record_fps =30;
-        String push_Url = "artc://susivvkjnfkj.xyz/supercamera/test?auth_key=1741096726-0-0-ba74d4cf9425560e376b453db36528e0"; // WebRTC 推流地址，可为空？？？
+        String push_Url = "rtsp://127.0.0.1:8554/live/123";
 
         if(currentState.get() != WorkflowState.READY)
         {
@@ -314,31 +313,6 @@ public class MainActivity extends AppCompatActivity {
         }
         else{
             Timber.tag(TAG).e("工作流开始失败");
-        }
-
-        Timber.tag(TAG).i("最终防抖配置 => 推流模式:%s, 录制模式:%s",
-                getCurrentPushStabMode().name(),
-                getCurrentRecordStabMode().name());
-
-        if(getCurrentPushStabMode() != push_StabilizationMode)
-        {
-            Timber.tag(TAG).w("推流防抖设置不支持 => 设置:%s, 实际:%s",
-                    push_StabilizationMode.name(),
-                    getCurrentPushStabMode().name());
-        }
-        if(getCurrentRecordStabMode() != record_StabilizationMode)
-        {
-            Timber.tag(TAG).w("录制防抖设置不支持 => 设置:%s, 实际:%s",
-                    record_StabilizationMode.name(),
-                    getCurrentRecordStabMode().name());
-        }
-        if(Now_Push_fps.get() != push_fps && Now_Push_fps.get() != -1)
-        {
-            Timber.tag(TAG).w("推流帧率设置不支持 => 设置:%d, 实际:%d", push_fps, Now_Push_fps.get());
-        }
-        if(Now_Record_fps.get() != record_fps && Now_Record_fps.get() != -1)
-        {
-            Timber.tag(TAG).w("录制帧率设置不支持 => 设置:%d, 实际:%d", record_fps, Now_Record_fps.get());
         }
     }
 
@@ -394,11 +368,6 @@ public class MainActivity extends AppCompatActivity {
                     //Stop();//通过事件总线统一处理
                     return 3;
                 }
-                //检查 push Surface 有效性
-                if (!videoPusher.isSurfaceValid()) {
-                    Timber.tag(TAG).e("推流器 Surface 初始化失败");
-                    return 5;
-                }
 
                 // 2. 初始化录制服务
                 videoRecorder = new VideoRecorder();
@@ -406,6 +375,11 @@ public class MainActivity extends AppCompatActivity {
                 // 检查 record Surface 有效性
                 if (!videoRecorder.isSurfaceValid()) {
                     Timber.tag(TAG).e("录制器 Surface 初始化失败");
+                    return 5;
+                }
+                //检查 push Surface 有效性
+                if (!videoPusher.isSurfaceValid()) {
+                    Timber.tag(TAG).e("推流器 Surface 初始化失败");
                     return 5;
                 }
 
@@ -460,6 +434,16 @@ public class MainActivity extends AppCompatActivity {
                 return false;
             }
         }
+    }
+
+    private void onStartReport() {
+        Timber.tag(TAG).i("最终帧率配置 => 推流模式:%s, 录制模式:%s",
+                currentPushFps.get(),
+                currentRecordFps.get());
+
+        Timber.tag(TAG).i("最终防抖配置 => 推流模式:%s, 录制模式:%s",
+                currentPushStabMode.get(),
+                currentRecordStabMode.get());
     }
 
     private void updateButtonState() {//更新按钮状态
@@ -523,19 +507,6 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
             CameraCharacteristics characteristics = manager.getCameraCharacteristics(cameraId);
             StreamConfigurationMap map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
 
-            // 检查推流分辨率（YUV格式）
-            Size[] supportedYuvSizes = map.getOutputSizes(ImageFormat.YUV_420_888);
-            if (supportedYuvSizes == null) {
-                Timber.e("设备不支持YUV_420_888格式");
-                return false;
-            }
-            Set<Size> yuvSizeSet = new HashSet<>(Arrays.asList(supportedYuvSizes));
-            Size pushSize = new Size(pushWidth, pushHeight);
-            if (!yuvSizeSet.contains(pushSize)) {
-                Timber.e("推流分辨率 %dx%d 不支持YUV格式", pushWidth, pushHeight);
-                return false;
-            }
-
             // 检查录制分辨率（Surface格式）
             Size[] supportedSurfaceSizes = map.getOutputSizes(SurfaceTexture.class);
             if (supportedSurfaceSizes == null) {
@@ -543,6 +514,12 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
                 return false;
             }
             Set<Size> surfaceSizeSet = new HashSet<>(Arrays.asList(supportedSurfaceSizes));
+            Size pushSize = new Size(pushWidth, pushHeight);
+            if (!surfaceSizeSet.contains(pushSize)) {
+                Timber.e("推流分辨率 %dx%d 不支持Surface输出", pushWidth, pushHeight);
+                return false;
+            }
+
             Size recordSize = new Size(recordWidth, recordHeight);
             if (!surfaceSizeSet.contains(recordSize)) {
                 Timber.e("录制分辨率 %dx%d 不支持Surface输出", recordWidth, recordHeight);
@@ -617,7 +594,7 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
                              StabilizationMode pushStabMode,
                              StabilizationMode recordStabMode) {
         try {
-            waitForSurfaceReady(); // 确保Surface就绪
+            waitForSurfaceReady(); // 确保预览Surface就绪
         } catch (RuntimeException e) {
             handleCameraError(SURFACE_TIMEOUT);
             return;
@@ -787,8 +764,8 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
                     cameraCaptureSession = session;
                     try {
                         session.setRepeatingRequest(requestBuilder.build(), null, cameraHandler);
-                        Now_Push_fps.set(fpsRange.getUpper());
-                        Now_Record_fps.set(fpsRange.getUpper());
+                        currentPushFps.set(fpsRange.getUpper());
+                        currentRecordFps.set(fpsRange.getUpper());
 
                         Timber.tag(TAGCamera).i("摄像头初始化成功");
                         checker.onStarted(onStartedCheck.StartPart.CAMERA, true);
@@ -843,8 +820,8 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
             applyStabilization(builder, enableOIS , enableEIS);
 
             // 记录实际生效模式
-            nowPushStabMode.set(calcEffectiveMode(enableOIS , enableEIS));
-            nowRecordStabMode.set(calcEffectiveMode(enableOIS, enableEIS));
+            currentPushStabMode.set(calcEffectiveMode(enableOIS , enableEIS));
+            currentRecordStabMode.set(calcEffectiveMode(enableOIS, enableEIS));
 
         } catch (CameraAccessException e) {
             handleCameraError(ERROR_CAMERA_SERVICE);
@@ -1014,7 +991,7 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
                             handleError(report);
                             break;
                         case Statistics:
-                            handleNetworkDelay(report);
+                            handleStatistics(report);
                             break;
                         case RECONNECTION:
                             handleReconnection(report);
@@ -1060,8 +1037,10 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
         Timber.tag(TAG).e(report.message);
     }
 
-    private void handleNetworkDelay(VideoPusher.PushReport report) {
-        Timber.tag(TAG).i("网络延迟rtt：%dms",report.rtt);
+    private void handleStatistics(VideoPusher.PushReport report) {
+        int dropRate = (int)report.pushFailureRate * 100;
+        Timber.tag(TAG).i("推流统计回调：当前码率：%dkbps; 网络延迟rtt：%dms; " +
+                        "丢包率：%d%",report.BitrateNow, report.rtt, dropRate);
     }
 
     private void handleRecordError(VideoRecorder.RecordReport report)
@@ -1121,14 +1100,6 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
         return new File(recordsDir,
                 "supercamera_record-" + dateStr + "_#" + newNumber + ".mp4"
         ).getAbsolutePath();
-    }
-
-    public StabilizationMode getCurrentPushStabMode() {
-        return nowPushStabMode.get();
-    }
-
-    public StabilizationMode getCurrentRecordStabMode() {
-        return nowRecordStabMode.get();
     }
 
     @Override

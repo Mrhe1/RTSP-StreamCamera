@@ -17,9 +17,11 @@ import org.bytedeco.ffmpeg.avcodec.AVCodecParameters;
 import java.nio.ByteBuffer;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
+import io.reactivex.rxjava3.core.Observable;
 import io.reactivex.rxjava3.disposables.CompositeDisposable;
 import io.reactivex.rxjava3.disposables.Disposable;
 import io.reactivex.rxjava3.schedulers.Schedulers;
@@ -40,7 +42,6 @@ public class VideoPusher {
     private Surface inputSurface; //Surface成员
     private long lastPresentationTimeUs = 0;
     private final ExecutorService encoderExecutor = Executors.newSingleThreadExecutor();
-    private final AtomicBoolean isInitializing = new AtomicBoolean(false);
     private final PublishSubject<PushReport> reportSubject = PublishSubject.create();
     private AVCodecParameters params = avcodec_parameters_alloc();
     private final CompositeDisposable compositeDisposable = new CompositeDisposable();
@@ -123,21 +124,25 @@ public class VideoPusher {
         setState(PushState.READY);
     }
 
-    public void startPush()
-    {
-        if(!setState(PushState.STARTING)){
-            Timber.tag(TAG).e("状态不对，无法开始推流");
-            return;
-        }
+    // 在 VideoPusher.java 的 startPush() 方法中修改
+    public void startPush() {
+        if(!setState(PushState.STARTING)) return;
 
-        try {
-            startStreamEncoder(width, height, fps, Bitrate);
-            setupEventHandlers();// 接收ffmpegPusher的消息队列
-        } catch (RuntimeException e) {
-            setState(PushState.ERROR);
-            Timber.tag(TAG).e("推流编码器初始化失败");
-            reportError(0,"推流编码器初始化失败");
-        }
+        // 使用 RxJava 切换到 IO 线程
+        Disposable disposable = Observable.fromCallable(() -> {
+                    startStreamEncoder(width, height, fps, Bitrate);
+                    setupEventHandlers();
+                    return true;
+                })
+                .subscribeOn(Schedulers.io())
+                .subscribe(
+                        success -> Timber.d("推流启动成功"),
+                        throwable -> {
+                            Timber.e(throwable, "推流启动失败");
+                            setState(PushState.ERROR);
+                        }
+                );
+        compositeDisposable.add(disposable);
     }
 
     public void stopPush() {
@@ -148,6 +153,16 @@ public class VideoPusher {
 
         pusher.stopPush();
         stopEncoding();
+
+        // 关闭encoderExecutor线程池
+        encoderExecutor.shutdown();
+        try {
+            if (!encoderExecutor.awaitTermination(500, TimeUnit.MILLISECONDS)) {
+                encoderExecutor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
 
         //释放RxJava资源
         if (!compositeDisposable.isDisposed()) {
@@ -160,12 +175,6 @@ public class VideoPusher {
     //////////////////////////////////////////////////////////////////////////////////
                              //!%编码部分%！//
     private void startStreamEncoder(int width, int height, int fps, int bitrate) {
-        if (isInitializing.get()) return;
-        isInitializing.set(true);
-        if (isPushing.get()) {
-            throw new RuntimeException("已经开始录制，无法重复开启");
-        }
-
         try {//bitrate单位kbps
             this.width = width;
             this.height = height;
@@ -295,7 +304,7 @@ public class VideoPusher {
         } catch (Exception e) {
             Timber.tag(TAGcodec).e(e, "推流编码器初始化失败");
             cleanupResources();
-            throw new RuntimeException("推流编码器初始化失败");
+            throw new RuntimeException("推流编码器初始化失败" + e.getMessage());
         }
     }
 
@@ -346,7 +355,7 @@ public class VideoPusher {
                     videoEncoder.stop();
                 }
             } catch (Exception e) {
-                Timber.e("停止录制出错: %s", e.getMessage());
+                Timber.tag(TAG).e("停止编码器出错: %s", e.getMessage());
             } finally {
                 // 4. 强制释放所有资源
                 if (videoEncoder != null) {
@@ -359,13 +368,14 @@ public class VideoPusher {
                 }
                 if (params != null && !params.isNull()) {
                     avcodec_parameters_free(params); // 释放参数内存
+                    params = null;
                 }
                 isPushing.set(false);
             }
         }
     }
 
-
+    // 只在startpush出错时被调用
     private void cleanupResources() {
         synchronized (dimensionLock) {
             try {

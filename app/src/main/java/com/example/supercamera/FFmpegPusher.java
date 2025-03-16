@@ -6,7 +6,9 @@ import org.bytedeco.ffmpeg.avutil.*;
 import org.bytedeco.javacpp.BytePointer;
 
 import static org.bytedeco.ffmpeg.global.avcodec.AV_PKT_FLAG_KEY;
+import static org.bytedeco.ffmpeg.global.avcodec.av_new_packet;
 import static org.bytedeco.ffmpeg.global.avcodec.av_packet_alloc;
+import static org.bytedeco.ffmpeg.global.avcodec.av_packet_free;
 import static org.bytedeco.ffmpeg.global.avcodec.av_packet_unref;
 import static org.bytedeco.ffmpeg.global.avcodec.avcodec_parameters_copy;
 import static org.bytedeco.ffmpeg.global.avformat.AVFMT_NOFILE;
@@ -21,6 +23,7 @@ import static org.bytedeco.ffmpeg.global.avformat.avformat_new_stream;
 import static org.bytedeco.ffmpeg.global.avformat.avformat_write_header;
 import static org.bytedeco.ffmpeg.global.avformat.avio_closep;
 import static org.bytedeco.ffmpeg.global.avformat.avio_open;
+import static org.bytedeco.ffmpeg.global.avutil.AV_NOPTS_VALUE;
 import static org.bytedeco.ffmpeg.global.avutil.av_dict_set;
 import static org.bytedeco.ffmpeg.global.avutil.av_rescale_q;
 import static org.bytedeco.ffmpeg.global.avutil.av_strerror;
@@ -33,6 +36,8 @@ import io.reactivex.rxjava3.disposables.Disposable;
 import io.reactivex.rxjava3.schedulers.Schedulers;
 import io.reactivex.rxjava3.subjects.PublishSubject;
 import timber.log.Timber;
+
+import java.nio.Buffer;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -200,7 +205,7 @@ public class FFmpegPusher {
                     VideoPusher.EventType.Statistics, 0, "推流统计回调",
                     currentBitrate, rtt.get(),  curPushFailureRate.get()));
 
-            if(curPushFailureRate.get()> pushFailureRate.get()){
+            if(curPushFailureRate.get() > pushFailureRate.get()){
                 ifNeedReconnect.set(true);
             }else ifNeedReconnect.set(false);
         }
@@ -260,40 +265,41 @@ public class FFmpegPusher {
         }
 
         boolean isSuccess = true;
-
-        // 创建足够大的BytePointer
-        BytePointer nativeBuffer = new BytePointer(bufferInfo.size);
-
-        // 正确拷贝数据的方式
-        byte[] tempArray = new byte[bufferInfo.size];
-        data.position(bufferInfo.offset);
-        data.get(tempArray, 0, bufferInfo.size);
-        nativeBuffer.put(tempArray);
-
         AVPacket pkt = av_packet_alloc();
-        pkt.data(nativeBuffer);
-        pkt.size(bufferInfo.size);
+        try {
+            int ret = av_new_packet(pkt, bufferInfo.size);
+            if (ret < 0) {
+                Timber.tag(TAG).e("帧写入分配内存失败: %d", ret);
+                return;
+            }
 
-        // 时间基计算修正
-        AVRational srcTimeBase = new AVRational();
-        srcTimeBase.num(1);
-        srcTimeBase.den(1000000);
-        pkt.pts(av_rescale_q(bufferInfo.presentationTimeUs,
-                srcTimeBase,
-                videoStream.time_base()));
-        pkt.stream_index(videoStream.index());
-        pkt.flags((bufferInfo.flags & MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0 ? AV_PKT_FLAG_KEY : 0);
+            // 数据拷贝
+            ByteBuffer dstBuffer = pkt.data().asBuffer();
+            dstBuffer.clear();
+            ((Buffer) data).position(bufferInfo.offset); // 显式转换为 Buffer 以调用 position
+            data.limit(bufferInfo.offset + bufferInfo.size);
+            dstBuffer.put(data);
 
-        int ret = av_interleaved_write_frame(outputContext, pkt);
-        if (ret < 0) {
-            isSuccess = false;
-            Timber.tag(TAG).e("帧写入失败: %d", ret);
+            // 时间基计算(使用微秒时间基)
+            AVRational srcTimeBase = new AVRational().num(1).den(1000000);
+            pkt.pts(av_rescale_q(bufferInfo.presentationTimeUs,
+                    srcTimeBase,
+                    videoStream.time_base()));
+            pkt.dts(AV_NOPTS_VALUE); // 让FFmpeg自动计算
+            pkt.stream_index(videoStream.index());
+            int flags = (bufferInfo.flags & MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0 ? AV_PKT_FLAG_KEY : 0;
+            pkt.flags(flags);
+
+            ret = av_interleaved_write_frame(outputContext, pkt);
+            if (ret < 0) {
+                isSuccess = false;
+                Timber.tag(TAG).e("帧写入失败: %d", ret);
+            }
+        }finally {
+            statistics.setPushStatistics(isSuccess, bufferInfo.size);
+            av_packet_unref(pkt); // 释放数据包
+            av_packet_free(pkt);  // 释放指针内存
         }
-        // 在packet释放后需要手动释放内存
-        av_packet_unref(pkt);
-        nativeBuffer.deallocate();
-
-        statistics.setPushStatistics(isSuccess, bufferInfo.size);
     }
 
     public void stopPush() {

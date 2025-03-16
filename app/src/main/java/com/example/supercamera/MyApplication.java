@@ -1,5 +1,10 @@
 package com.example.supercamera;
 
+import static org.bytedeco.ffmpeg.global.avutil.AV_LOG_DEBUG;
+import static org.bytedeco.ffmpeg.global.avutil.AV_LOG_ERROR;
+import static org.bytedeco.ffmpeg.global.avutil.av_log_set_callback;
+import static org.bytedeco.ffmpeg.global.avutil.av_log_set_level;
+
 import android.app.Application;
 import com.example.supercamera.BuildConfig;
 import timber.log.Timber;
@@ -19,6 +24,9 @@ public class MyApplication extends Application {
 
         // 优先初始化日志系统
         initLoggingSystem();
+
+        // 在应用启动时设置
+        av_log_set_level(AV_LOG_DEBUG);
     }
 
     private void initLoggingSystem() {
