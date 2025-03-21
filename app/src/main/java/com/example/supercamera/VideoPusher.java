@@ -8,6 +8,8 @@ import static org.bytedeco.ffmpeg.global.avutil.AVMEDIA_TYPE_VIDEO;
 import android.media.MediaCodec;
 import android.media.MediaCodecInfo;
 import android.media.MediaFormat;
+import android.os.Handler;
+import android.os.HandlerThread;
 import android.view.Surface;
 
 import androidx.annotation.NonNull;
@@ -17,6 +19,8 @@ import org.bytedeco.ffmpeg.avcodec.AVCodecParameters;
 import java.nio.ByteBuffer;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -29,10 +33,11 @@ import io.reactivex.rxjava3.subjects.PublishSubject;
 import timber.log.Timber;
 
 public class VideoPusher {
+    private HandlerThread codecThread;
+    private final ScheduledExecutorService errorHandler;
     private MediaCodec videoEncoder;
     private static final String TAGcodec = "StreamEncoder";
     private static final String TAG = "VideoPusher";
-    public final AtomicBoolean isPushing = new AtomicBoolean(false);
     private int width;
     private int height;
     private int fps;
@@ -108,23 +113,24 @@ public class VideoPusher {
             case RECONNECTING -> newState == PushState.ERROR || newState == PushState.PUSHING
             || newState == PushState.STOPPING;
             case ERROR -> newState == PushState.STOPPING;
+            case STOPPING -> newState == PushState.READY || newState == PushState.ERROR;
             default -> false;
         };
     }
 
     public VideoPusher(String url, int width, int height, int fps,
-                       int Bitrate){
+                       int Bitrate, ScheduledExecutorService errorHandler){
         this.width = width;
         this.height = height;
         this.fps = fps;
         this.Bitrate = Bitrate;
+        this.errorHandler = errorHandler; // 接收外部线程池
 
         pusher = new FFmpegPusher(url, width, height, fps, Bitrate);
 
         setState(PushState.READY);
     }
 
-    // 在 VideoPusher.java 的 startPush() 方法中修改
     public void startPush() {
         if(!setState(PushState.STARTING)) return;
 
@@ -179,6 +185,12 @@ public class VideoPusher {
             this.width = width;
             this.height = height;
 
+            // 创建带Looper的HandlerThread
+            HandlerThread codecThread = new HandlerThread("VideoEncoder-Callback");
+            codecThread.start();
+            Handler codecHandler = new Handler(codecThread.getLooper());
+
+
             // 1. 提前初始化编码器（H.264）
             MediaFormat format = MediaFormat.createVideoFormat(
                     MediaFormat.MIMETYPE_VIDEO_AVC, width, height
@@ -225,7 +237,8 @@ public class VideoPusher {
                 public void onOutputBufferAvailable(@NonNull MediaCodec mc, int outputBufferId,
                                                     @NonNull MediaCodec.BufferInfo bufferInfo) {
                     synchronized (dimensionLock) {
-                        if (!isPushing.get()) return;
+                        if (currentState.get() != PushState.PUSHING &&
+                        currentState.get() != PushState.STARTING) return;
 
                         // 获取实际的 ByteBuffer
                         ByteBuffer outputBuffer = mc.getOutputBuffer(outputBufferId);
@@ -257,8 +270,12 @@ public class VideoPusher {
                                 String msg = String.format("ffmpeg初始化失败:%s",e.getMessage());
                                 Timber.tag(TAG).e(msg);
                                 setState(PushState.ERROR);
-                                stopPush();
-                                reportError(0,msg);
+
+                                // 在单独线程中出处理错误
+                                ScheduledFuture<?> future = errorHandler.schedule(() -> {
+                                    stopPush();
+                                    reportError(0,msg);
+                                }, 100, TimeUnit.MILLISECONDS);
                             }
 
                             if(currentState.get() == PushState.STARTING) setState(PushState.PUSHING);
@@ -293,13 +310,11 @@ public class VideoPusher {
                 public void onOutputFormatChanged(@NonNull MediaCodec codec, @NonNull MediaFormat format) {
 
                 }
-            });
+            }, codecHandler);
 
             // 2. 提前创建 Surface
             inputSurface = videoEncoder.createInputSurface();
             videoEncoder.start(); // 启动编码器但不立即开始录制
-
-            isPushing.set(true);
 
         } catch (Exception e) {
             Timber.tag(TAGcodec).e(e, "推流编码器初始化失败");
@@ -342,8 +357,6 @@ public class VideoPusher {
 
     public void stopEncoding() {
         synchronized (dimensionLock) {
-            if (!isPushing.get()) return;
-
             try {
                 // 1. 发送编码结束信号（仅Surface模式需要）
                 if (videoEncoder != null) {
@@ -370,7 +383,9 @@ public class VideoPusher {
                     avcodec_parameters_free(params); // 释放参数内存
                     params = null;
                 }
-                isPushing.set(false);
+                if (codecThread != null) {
+                    codecThread.quitSafely();
+                }
             }
         }
     }

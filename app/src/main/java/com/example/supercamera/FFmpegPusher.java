@@ -174,12 +174,16 @@ public class FFmpegPusher {
 
         public void stopPushStatistics()
         {
-            //停止ping
-            pingHelper.stopPeriodicPing();
+            try {
+                //停止ping
+                pingHelper.stopPeriodicPing();
 
-            //停止report
-            if (executor != null) {
-                executor.shutdown();
+                //停止report
+                if (executor != null) {
+                    executor.shutdown();
+                }
+            } catch (Exception e) {
+                throw new RuntimeException(e);
             }
         }
 
@@ -304,12 +308,17 @@ public class FFmpegPusher {
 
     public void stopPush() {
         synchronized (initStopLock) {
-            // 停止统计
-            statistics.stopPushStatistics();
-            //销毁重连
-            disposeReconnect();
+            try {
+                if (statistics != null) {
+                    // 停止统计
+                    statistics.stopPushStatistics();
+                }
+                //销毁重连
+                disposeReconnect();
+                stopFfmpeg();
+            } catch (Exception e) {
 
-            stopFfmpeg();
+            }
         }
     }
 
@@ -318,16 +327,21 @@ public class FFmpegPusher {
 
     private void startFfmpeg(){
         synchronized (initStopLock) {
+            AVFormatContext outputContext = null;
+            AVDictionary options = null;
             try {
-                // 1. 初始化上下文
+                // 1. 初始化网络
                 avformat_network_init();
-                outputContext = avformat_alloc_context();
-                AVOutputFormat outputFormat = av_guess_format("rtsp", null, null);
-                outputContext.oformat(outputFormat);
 
-                // 2. 创建流并复制参数
+                // 2. 分配上下文
+                outputContext = avformat_alloc_context();
+                if (outputContext == null || outputContext.isNull()) {
+                    throw new RuntimeException("无法分配AVFormatContext");
+                }
+
+                // 3. 创建流
                 videoStream = avformat_new_stream(outputContext, null);
-                if (videoStream == null) {
+                if (videoStream == null || videoStream.isNull()) {
                     throw new RuntimeException("无法创建视频流");
                 }
 
@@ -338,30 +352,45 @@ public class FFmpegPusher {
                     throw new RuntimeException("参数复制失败: " + av_err2str(ret));
                 }
 
-                // 3. 强制设置关键参数（确保与编码器一致）
+                // 强制设置关键参数（确保与编码器一致）
                 dstParams.codec_tag(0); // 必须清除原有tag
                 dstParams.extradata(new BytePointer(header)); // 设置SPS/PPS
                 dstParams.extradata_size(header.length);
 
-                // 4. 时间基配置（必须与帧时间戳匹配）
+                // 时间基配置（必须与帧时间戳匹配）
                 videoStream.time_base().num(1);
                 videoStream.time_base().den(fps);
 
-                // 5. 打开输出
-                AVDictionary options = new AVDictionary();
+                // 4. 打开输出
+                AVIOContext pb = new AVIOContext(null);
+                outputContext.pb(pb);
+                if (pb == null || pb.isNull()) {
+                    throw new RuntimeException("AVIOContext 指针未正确初始化");
+                }
+                // 显式检查 URL 有效性
+                if (url == null || url.isEmpty()) {
+                    throw new RuntimeException("URL 格式无效");
+                }
+                ret = avio_open(outputContext.pb(), url, AVIO_FLAG_WRITE);
+                if (ret < 0) {
+                    throw new RuntimeException("avio_open失败: " + av_err2str(ret));
+                }
+
+                // 5. 设置字典项
+                options = new AVDictionary();
                 av_dict_set(options, new BytePointer("rtsp_transport"), new BytePointer("tcp"), 0);
                 av_dict_set(options, new BytePointer("preset"), new BytePointer("ultrafast"), 0);
                 av_dict_set(options, new BytePointer("tune"), new BytePointer("zerolatency"), 0);
-
-                if (avio_open(outputContext.pb(), url, AVIO_FLAG_WRITE) < 0) {
-                    throw new RuntimeException("无法打开输出URL");
-                }
+                av_dict_set(options, "rw_timeout", "5000000", 0); // 5秒读写超时
+                av_dict_set(options, "timeout", "5000000", 0); // 总超时
 
                 // 6. 写入头部
                 ret = avformat_write_header(outputContext, options);
                 if (ret < 0) {
                     throw new RuntimeException("写头失败: " + av_err2str(ret));
                 }
+
+                this.outputContext = outputContext; // 仅在成功时赋值给成员变量
 
                 // 7. 开始统计帧数据
                 statistics = new PushStatistics();
@@ -377,14 +406,25 @@ public class FFmpegPusher {
     }
 
     private void stopFfmpeg() {
-        av_write_trailer(outputContext);
-        if (outputContext != null) {
-            if ((outputContext.oformat().flags() & AVFMT_NOFILE) == 0) {
-                avio_closep(outputContext.pb());
+        synchronized (initStopLock) {
+            try {
+                if (outputContext != null && !outputContext.isNull()) {
+                    // 必须检查是否已写入头
+                    if ((outputContext.oformat().flags() & AVFMT_NOFILE) == 0
+                            && !outputContext.pb().isNull()) {
+                        av_write_trailer(outputContext); // 仅在成功初始化后调用
+                        avio_closep(outputContext.pb());
+                    }
+                    avformat_free_context(outputContext);
+                }
+            } catch (Exception e) {
+                Timber.e(e, "释放FFmpeg资源异常");
+            } finally {
+                outputContext = null; // 确保指针置空
             }
-            avformat_free_context(outputContext);
         }
     }
+
 
     private void restartPusher(){
         if(VideoPusher.currentState.get() != VideoPusher.PushState.RECONNECTING) {

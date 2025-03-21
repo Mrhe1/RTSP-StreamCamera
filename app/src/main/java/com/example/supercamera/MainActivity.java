@@ -40,6 +40,7 @@ import android.view.View;
 import java.io.File;
 import java.text.SimpleDateFormat;
 import java.util.Locale;
+import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -117,6 +118,7 @@ public class MainActivity extends AppCompatActivity {
     private HandlerThread streamingHandlerThread;
     private Handler streamingHandler;
     private ImageReader streamingReader;
+    private ScheduledExecutorService globalErrorHandler;
 
     public class onStartedCheck{
         private AtomicIntegerArray isStarted = new AtomicIntegerArray(3);
@@ -252,7 +254,19 @@ public class MainActivity extends AppCompatActivity {
         // 初始化按钮状态
         updateButtonState();
 
+        // 初始化全局错误处理线程池（单线程）
+        globalErrorHandler = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "GlobalErrorHandler");
+            t.setPriority(Thread.MIN_PRIORITY);
+            return t;
+        });
+
         setState(WorkflowState.READY);
+    }
+
+    // 暴露全局错误处理线程池给其他组件
+    public ScheduledExecutorService getGlobalErrorHandler() {
+        return globalErrorHandler;
     }
 
     public static boolean setState(WorkflowState newState) {
@@ -360,7 +374,9 @@ public class MainActivity extends AppCompatActivity {
             try {
                 // 1.初始化推流服务
                 try {
-                    videoPusher = new VideoPusher(push_Url, push_width, push_height, push_fps, push_initAvgBitrate);
+                    videoPusher = new VideoPusher(push_Url, push_width, push_height,
+                            push_fps, push_initAvgBitrate,
+                            getGlobalErrorHandler());
                     videoPusher.startPush();
                 } catch (RuntimeException e) {
                     Timber.tag(TAG).e("推流服务出错：%s", e.getMessage());
@@ -1116,6 +1132,11 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
         //释放RxJava资源
         if (compositeDisposable != null && !compositeDisposable.isDisposed()) {
             compositeDisposable.dispose();
+        }
+
+        // 关闭线程池
+        if (globalErrorHandler != null) {
+            globalErrorHandler.shutdownNow();
         }
         super.onDestroy();
     }

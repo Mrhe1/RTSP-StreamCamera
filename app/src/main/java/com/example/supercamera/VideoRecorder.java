@@ -4,6 +4,8 @@ import android.media.MediaCodec;
 import android.media.MediaCodecInfo;
 import android.media.MediaFormat;
 import android.media.MediaMuxer;
+import android.os.Handler;
+import android.os.HandlerThread;
 import android.view.Surface;
 import androidx.annotation.NonNull;
 import java.nio.ByteBuffer;
@@ -15,6 +17,7 @@ import io.reactivex.rxjava3.subjects.PublishSubject;
 import timber.log.Timber;
 
 public class VideoRecorder {
+    private HandlerThread codecThread;
     private MediaCodec videoEncoder;
     private MediaMuxer mediaMuxer;
     private int trackIndex;
@@ -58,6 +61,11 @@ public class VideoRecorder {
             try {//bitrate单位kbps
                 this.width = width;
                 this.height = height;
+
+                // 创建带Looper的HandlerThread
+                HandlerThread codecThread = new HandlerThread("VideoEncoder-Callback");
+                codecThread.start();
+                Handler codecHandler = new Handler(codecThread.getLooper());
 
                 // 2. 初始化 MediaMuxer
                     mediaMuxer = new MediaMuxer(outputPath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
@@ -166,7 +174,7 @@ public class VideoRecorder {
                                     RecordEventType.STARTED, 0,
                                     "录制启动成功"));
                         }
-                    });
+                    }, codecHandler);
 
                 // 2. 提前创建 Surface
                     inputSurface = videoEncoder.createInputSurface();
@@ -232,6 +240,9 @@ public class VideoRecorder {
                 if (inputSurface != null) {
                     inputSurface.release();
                     inputSurface = null;
+                }
+                if (codecThread != null) {
+                    codecThread.quitSafely();
                 }
                 isRecording.set(false);
             }
