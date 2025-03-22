@@ -17,6 +17,15 @@ android {
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    packagingOptions {
+        // 处理所有架构的 JNI 配置冲突
+        pickFirst 'META-INF/native-image/**/jnijavacpp/jni-config.json'
+
+        // 排除其他可能冲突的文件
+        exclude 'META-INF/DEPENDENCIES'
+        exclude 'META-INF/INDEX.LIST'
+    }
+
     buildTypes {
         release {
             minifyEnabled false
@@ -88,8 +97,10 @@ dependencies {
     //implementation group: 'org.bytedeco', name: 'ffmpeg', version: '7.1-1.5.11'
     //implementation group: 'org.bytedeco', name: 'javacv', version: '1.5.11'
     //implementation group: 'org.bytedeco', name: 'javacpp', version: '1.5.11'
-    implementation 'org.bytedeco:javacv:1.5.11'
-    implementation 'org.bytedeco:ffmpeg:7.1-1.5.11'
+    //implementation 'org.bytedeco:javacv:1.5.11'
+    implementation 'org.bytedeco:javacpp:1.5.9'
+    //implementation 'org.bytedeco:ffmpeg:7.1-1.5.11'
+    implementation("org.bytedeco:ffmpeg:6.0-1.5.9")
     //implementation 'org.bytedeco:ffmpeg:6.0-1.5.9:android-arm64'
 }
 configurations {
