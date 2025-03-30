@@ -31,6 +31,10 @@ android {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
+        debug {
+            jniDebuggable true
+            renderscriptDebuggable true
+        }
     }
 
     compileOptions {
@@ -70,6 +74,7 @@ dependencies {
     implementation libs.constraintlayout
     implementation libs.annotation.jvm
     implementation libs.core
+    //implementation fileTree(dir: 'C:\\Users\\Administrator\\.m2\\repository\\org\\bytedeco\\ffmpeg\\7.1.1-1.5.12-SNAPSHOT', include: ['*.aar', '*.jar'], exclude: [])
     testImplementation libs.junit
     androidTestImplementation libs.ext.junit
     androidTestImplementation libs.espresso.core
@@ -88,20 +93,20 @@ dependencies {
     implementation "androidx.camera:camera-video:${camerax_version}"
     implementation "com.google.guava:guava:31.0.1-android"
     implementation 'com.github.stealthcopter:AndroidNetworkTools:0.4.5.3'
-    //implementation 'org.bytedeco:javacpp-platform:1.5.10'
-    //implementation 'org.bytedeco:javacv-platform:1.5.10'
-    //implementation 'org.bytedeco:ffmpeg-platform:6.1.1-1.5.10'
-    //implementation group: 'org.bytedeco', name: 'ffmpeg-platform', version: '7.1-1.5.11'
-    //implementation group: 'org.bytedeco', name: 'javacv-platform', version: '1.5.11'
-    //implementation group: 'org.bytedeco', name: 'javacpp-platform', version: '1.5.11'
-    //implementation group: 'org.bytedeco', name: 'ffmpeg', version: '7.1-1.5.11'
-    //implementation group: 'org.bytedeco', name: 'javacv', version: '1.5.11'
-    //implementation group: 'org.bytedeco', name: 'javacpp', version: '1.5.11'
-    //implementation 'org.bytedeco:javacv:1.5.11'
-    implementation 'org.bytedeco:javacpp:1.5.9'
-    //implementation 'org.bytedeco:ffmpeg:7.1-1.5.11'
-    implementation("org.bytedeco:ffmpeg:6.0-1.5.9")
-    //implementation 'org.bytedeco:ffmpeg:6.0-1.5.9:android-arm64'
+    implementation 'org.bytedeco:javacpp:1.5.11'
+    implementation 'org.bytedeco:ffmpeg:7.1-1.5.11' //{
+        // 指定主 JAR
+        //artifact {
+            //name = 'ffmpeg'
+            //extension = 'jar'
+        //}
+        // 指定分类器（例如 android-arm64）
+        //artifact {
+            //name = 'ffmpeg'
+            //classifier = 'android-arm64'
+            //extension = 'jar'
+        //}
+    //}
 }
 configurations {
     all*.exclude group: 'org.bytedeco', module: 'opencv'

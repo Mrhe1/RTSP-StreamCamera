@@ -107,8 +107,9 @@ public class VideoPusher {
         PushState current = currentState.get();
         return switch (current) {
             case READY -> newState == PushState.STARTING;
-            case STARTING -> newState == PushState.PUSHING || newState == PushState.ERROR;
-            case PUSHING -> newState == PushState.ERROR || newState == PushState.STARTING
+            case STARTING -> newState == PushState.PUSHING || newState == PushState.ERROR ||
+                    newState == PushState.STOPPING;
+            case PUSHING -> newState == PushState.ERROR || newState == PushState.STOPPING
                     || newState == PushState.RECONNECTING;
             case RECONNECTING -> newState == PushState.ERROR || newState == PushState.PUSHING
             || newState == PushState.STOPPING;
@@ -160,8 +161,10 @@ public class VideoPusher {
         pusher.stopPush();
         stopEncoding();
 
-        // 关闭encoderExecutor线程池
-        encoderExecutor.shutdown();
+        if(encoderExecutor != null) {
+            // 关闭encoderExecutor线程池
+            encoderExecutor.shutdown();
+        }
         try {
             if (!encoderExecutor.awaitTermination(500, TimeUnit.MILLISECONDS)) {
                 encoderExecutor.shutdownNow();

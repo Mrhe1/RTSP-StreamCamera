@@ -15,6 +15,10 @@ plugins {
     alias(libs.plugins.android.application) apply false
 }
 
+ext {
+    ffmpegVersion = '7.1.1-1.5.12-SNAPSHOT'
+}
+
 allprojects {
     configurations.configureEach {
         resolutionStrategy {

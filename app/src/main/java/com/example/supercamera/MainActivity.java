@@ -115,9 +115,6 @@ public class MainActivity extends AppCompatActivity {
     private volatile boolean isSurfaceAvailable = false;
     private final Object surfaceLock = new Object();
     private Surface previewSurface = null;
-    private HandlerThread streamingHandlerThread;
-    private Handler streamingHandler;
-    private ImageReader streamingReader;
     private ScheduledExecutorService globalErrorHandler;
 
     public class onStartedCheck{
@@ -247,10 +244,6 @@ public class MainActivity extends AppCompatActivity {
         textureView.setVisibility(View.VISIBLE); // 立即可见
         textureView.setSurfaceTextureListener(surfaceTextureListener);
 
-        streamingHandlerThread = new HandlerThread("StreamingImageProcessor");
-        streamingHandlerThread.start();
-        streamingHandler = new Handler(streamingHandlerThread.getLooper());
-
         // 初始化按钮状态
         updateButtonState();
 
@@ -302,13 +295,13 @@ public class MainActivity extends AppCompatActivity {
         int push_initAvgBitrate = 1000;//单位kbps
         int push_initMaxBitrate = 1200;
         int push_initMinBitrate = 400;
-        StabilizationMode push_StabilizationMode = StabilizationMode.OIS_ONLY;//防抖
-        StabilizationMode record_StabilizationMode = StabilizationMode.HYBRID;
-        int record_width = 1920;
-        int record_height = 1080;
-        int record_bitrate = 2000;//单位kbps
+        StabilizationMode push_StabilizationMode = StabilizationMode.OFF;//防抖
+        StabilizationMode record_StabilizationMode = StabilizationMode.OFF;
+        int record_width = 2560;
+        int record_height = 1440;
+        int record_bitrate = 5000;//单位kbps
         int record_fps =30;
-        String push_Url = "rtmp://127.0.0.1:8554/live/stream";
+        String push_Url = "rtsp://8.137.9.238:1521/live/stream";
 
         if(currentState.get() != WorkflowState.READY)
         {
@@ -400,7 +393,7 @@ public class MainActivity extends AppCompatActivity {
                 }
 
                 // 3. 启动摄像头
-                startCamera(push_width, push_height, record_width, record_height, 60,
+                startCamera(push_width, push_height, record_width, record_height, push_fps,
                         push_StabilizationMode, record_StabilizationMode);
 
                 setupEventHandlers();
@@ -907,11 +900,6 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
                 }
             });
 
-            // 先停止回调处理
-            if (streamingReader != null) {
-                streamingReader.setOnImageAvailableListener(null, null); // 移除监听器
-            }
-
             // 按正确顺序释放资源
             if (cameraCaptureSession != null) {
                 cameraCaptureSession.abortCaptures();
@@ -919,26 +907,9 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
                 cameraCaptureSession = null;
             }
 
-            if (streamingReader != null) {
-                streamingReader.close();
-                streamingReader = null;
-            }
-
             if (cameraDevice != null) {
                 cameraDevice.close();
                 cameraDevice = null;
-            }
-
-            // 最后停止线程
-            if (streamingHandlerThread != null) {
-                streamingHandlerThread.quitSafely();
-                try {
-                    streamingHandlerThread.join(500);
-                } catch (InterruptedException e) {
-                    Timber.e("等待线程停止异常");
-                }
-                streamingHandlerThread = null;
-                streamingHandler = null;
             }
 
             if (cameraHandler != null) {
@@ -1056,7 +1027,7 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
     private void handleStatistics(VideoPusher.PushReport report) {
         int dropRate = (int)report.pushFailureRate * 100;
         Timber.tag(TAG).i("推流统计回调：当前码率：%dkbps; 网络延迟rtt：%dms; " +
-                        "丢包率：%d%",report.BitrateNow, report.rtt, dropRate);
+                        "丢包率：%d%%",report.BitrateNow, report.rtt, dropRate);
     }
 
     private void handleRecordError(VideoRecorder.RecordReport report)

@@ -5,6 +5,7 @@ import org.bytedeco.ffmpeg.avformat.*;
 import org.bytedeco.ffmpeg.avutil.*;
 import org.bytedeco.javacpp.BytePointer;
 import org.bytedeco.javacpp.Pointer;
+import org.bytedeco.javacpp.PointerPointer;
 import org.bytedeco.javacpp.PointerScope;
 
 import static org.bytedeco.ffmpeg.global.avcodec.AV_PKT_FLAG_KEY;
@@ -19,6 +20,7 @@ import static org.bytedeco.ffmpeg.global.avformat.av_guess_format;
 import static org.bytedeco.ffmpeg.global.avformat.av_interleaved_write_frame;
 import static org.bytedeco.ffmpeg.global.avformat.av_write_trailer;
 import static org.bytedeco.ffmpeg.global.avformat.avformat_alloc_context;
+import static org.bytedeco.ffmpeg.global.avformat.avformat_alloc_output_context2;
 import static org.bytedeco.ffmpeg.global.avformat.avformat_free_context;
 import static org.bytedeco.ffmpeg.global.avformat.avformat_network_init;
 import static org.bytedeco.ffmpeg.global.avformat.avformat_new_stream;
@@ -28,6 +30,7 @@ import static org.bytedeco.ffmpeg.global.avformat.avio_closep;
 import static org.bytedeco.ffmpeg.global.avformat.avio_context_free;
 import static org.bytedeco.ffmpeg.global.avformat.avio_enum_protocols;
 import static org.bytedeco.ffmpeg.global.avformat.avio_open;
+import static org.bytedeco.ffmpeg.global.avformat.avio_open2;
 import static org.bytedeco.ffmpeg.global.avutil.AV_NOPTS_VALUE;
 import static org.bytedeco.ffmpeg.global.avutil.av_dict_free;
 import static org.bytedeco.ffmpeg.global.avutil.av_dict_set;
@@ -220,6 +223,8 @@ public class FFmpegPusher {
             if(curPushFailureRate.get() > pushFailureRate.get()){
                 ifNeedReconnect.set(true);
             }else ifNeedReconnect.set(false);
+
+            frameList.clear();
         }
 
         // 判断是否需要重连（可指定pushFrame出现Error的比例超过pushFailureRate就重连）
@@ -286,12 +291,17 @@ public class FFmpegPusher {
                     return;
                 }
 
-                // 数据拷贝
-                ByteBuffer dstBuffer = pkt.data().asBuffer();
-                dstBuffer.clear();
-                ((Buffer) data).position(bufferInfo.offset); // 显式转换为 Buffer 以调用 position
-                data.limit(bufferInfo.offset + bufferInfo.size);
-                dstBuffer.put(data);
+                // 关键步骤：直接操作内存
+                BytePointer dstPtr = pkt.data();  // 获取目标内存指针
+                BytePointer srcPtr = new BytePointer(data);  // 将源数据包装为 BytePointer
+
+                // 设置拷贝范围（偏移和大小）
+                srcPtr.position(bufferInfo.offset);  // 源数据起始位置
+                srcPtr.limit(bufferInfo.offset + bufferInfo.size);  // 源数据结束位置
+
+                // 直接内存拷贝（绕过 ByteBuffer）
+                dstPtr.put(srcPtr);
+
 
                 // 时间基计算(使用微秒时间基)
                 AVRational srcTimeBase = new AVRational().num(1).den(1000000);
@@ -308,7 +318,9 @@ public class FFmpegPusher {
                     isSuccess = false;
                     Timber.tag(TAG).e("帧写入失败: %d", ret);
                 }
-            } finally {
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }finally {
                 statistics.setPushStatistics(isSuccess, bufferInfo.size);
                 av_packet_unref(pkt); // 释放数据包
                 av_packet_free(pkt);  // 释放指针内存
@@ -335,87 +347,91 @@ public class FFmpegPusher {
     /////////////////////////////////////////////////////////////////////////////////
                                 //%!以下方法为内部方法！%//
 
-    private void startFfmpeg(){
+    private void startFfmpeg() {
         synchronized (initStopLock) {
             AVFormatContext outputContext = null;
             AVDictionary options = null;
-            AVIOContext pb = null;
-            BytePointer buffer = null;
             try {
-                // 检验url
+                // 必须确保URL以rtsp://开头
                 //if (!url.startsWith("rtsp://")) {
-                    //throw new IllegalArgumentException("协议头不合法");
-                //}
+                    //throw new IllegalArgumentException("URL必须以rtsp://开头");
+               // }
 
-                // 1. 初始化网络
+                // 1. 初始化网络（关键）
                 avformat_network_init();
 
-                // 2. 分配上下文
-                outputContext = avformat_alloc_context();
-                if (outputContext == null || outputContext.isNull()) {
-                    throw new RuntimeException("无法分配AVFormatContext");
+                // 2. 使用alloc_output_context2自动创建上下文
+                AVOutputFormat outputFormat = av_guess_format("rtsp", null, null);
+                if (outputFormat == null) {
+                    throw new RuntimeException("FFmpeg未编译RTSP支持");
                 }
-                outputContext.max_delay(200000); // 0.2秒最大延迟
 
-                // 3. 创建流
+                PointerPointer<AVFormatContext> ctxPtr = new PointerPointer<>(1);
+
+                int ret = avformat_alloc_output_context2(
+                        ctxPtr,          // 双指针容器
+                        outputFormat,
+                        new BytePointer("rtsp"),
+                        new BytePointer(url)
+                );
+
+                if (ret < 0 || ctxPtr.get() == null) {
+                    throw new RuntimeException("上下文分配失败: " + av_err2str(ret));
+                }
+                outputContext = new AVFormatContext(ctxPtr.get());
+
+                // 检查pb是否已初始化
+                if (outputContext.pb() == null || outputContext.pb().isNull()) {
+                    // 需要手动初始化AVIOContext
+                    outputContext.pb(avio_alloc_context(
+                            new BytePointer(av_malloc(4096)),
+                            4096,
+                            AVIO_FLAG_WRITE,
+                            null, null, null, null
+                    ));
+                }
+
+                // 3. 创建视频流
                 videoStream = avformat_new_stream(outputContext, null);
                 if (videoStream == null || videoStream.isNull()) {
                     throw new RuntimeException("无法创建视频流");
                 }
 
-                // 使用参数复制
+                // 参数复制
                 AVCodecParameters dstParams = videoStream.codecpar();
-                int ret = avcodec_parameters_copy(dstParams, srcParams);
+                ret = avcodec_parameters_copy(dstParams, srcParams);
                 if (ret < 0) {
                     throw new RuntimeException("参数复制失败: " + av_err2str(ret));
                 }
 
-                // 强制设置关键参数（确保与编码器一致）
-                dstParams.codec_tag(0); // 必须清除原有tag
-                dstParams.extradata(new BytePointer(header)); // 设置SPS/PPS
+                // 设置关键参数
+                dstParams.codec_tag(0);
+                dstParams.extradata(new BytePointer(header));
                 dstParams.extradata_size(header.length);
 
-                // 时间基配置（必须与帧时间戳匹配）
+                // 时间基配置
                 videoStream.time_base().num(1);
                 videoStream.time_base().den(fps);
 
-                // 4. 打开输出
-                int bufferSize = 4096;
-                buffer = new BytePointer(av_malloc(bufferSize));
-                if (buffer == null || buffer.isNull()) {
-                    throw new RuntimeException("无法分配I/O缓冲区");
-                }
-
-                // 创建 AVIOContext
-                pb = avio_alloc_context(
-                        buffer,          // 缓冲区指针
-                        bufferSize,      // 缓冲区大小
-                        AVIO_FLAG_WRITE, // 写模式
-                        null,            // 不透明数据
-                        null,            // 读回调（不需要）
-                        null,            // 写回调
-                        null             // 寻址回调（不需要）
-                );
-                if (pb == null || pb.isNull()) {
-                    throw new RuntimeException("无法创建AVIOContext");
-                }
-
-                // 关联到输出上下文
-                outputContext.pb(pb);
-
-                // 打开输出
-                ret = avio_open(pb, url, AVIO_FLAG_WRITE);
-                if (ret < 0) {
-                    throw new RuntimeException("avio_open失败: " + av_err2str(ret));
-                }
-
-                // 5. 设置字典项
+                // 4. 设置选项
                 options = new AVDictionary();
-                //av_dict_set(options, "rtsp_transport", "tcp", 0);
-                av_dict_set(options, "preset", "ultrafast", 0);
+                av_dict_set(options, "rtsp_transport", "tcp", 0);
+                av_dict_set(options, "max_delay", "200000", 0);
                 av_dict_set(options, "tune", "zerolatency", 0);
-                av_dict_set(options, "rw_timeout", "5000000", 0); // 5秒读写超时
-                av_dict_set(options, "timeout", "5000000", 0); // 总超时
+                av_dict_set(options, "timeout", "5000000", 0); // 5秒超时\
+                av_dict_set(options, "f", "rtsp", 0);
+
+                // 5. 打开输出
+                //ret = avio_open2(
+                        //outputContext.pb(),    // 直接使用上下文的pb指针
+                        //new BytePointer(url),
+                        //AVIO_FLAG_WRITE,
+                        //null,
+                        //options
+                //);
+                //if (ret < 0) {
+                    //throw new RuntimeException("avio_open失败: " + av_err2str(ret));
+                //}
 
                 // 6. 写入头部
                 ret = avformat_write_header(outputContext, options);
@@ -423,7 +439,7 @@ public class FFmpegPusher {
                     throw new RuntimeException("写头失败: " + av_err2str(ret));
                 }
 
-                this.outputContext = outputContext; // 仅在成功时赋值给成员变量
+                this.outputContext = outputContext;
 
                 // 7. 开始统计帧数据
                 statistics = new PushStatistics();
@@ -431,17 +447,10 @@ public class FFmpegPusher {
                         url, 0.4);
 
             } catch (Exception e) {
-                // 内存释放
-                if (pb != null && !pb.isNull()) {
-                    avio_context_free(pb);
-                }
-                if (buffer != null) {
-                    av_free(buffer);
-                }
-
+                // 错误处理
                 stopFfmpeg();
                 throw new RuntimeException(e);
-            }finally {
+            } finally {
                 if (options != null) av_dict_free(options);
             }
         }
@@ -452,8 +461,8 @@ public class FFmpegPusher {
             try {
                 if (outputContext != null && !outputContext.isNull()) {
                     // 必须检查是否已写入头
-                    if ((outputContext.oformat().flags() & AVFMT_NOFILE) == 0
-                            && !outputContext.pb().isNull()) {
+                    if (!((outputContext.oformat().flags() & AVFMT_NOFILE) == 0)
+                            ) {
                         av_write_trailer(outputContext); // 仅在成功初始化后调用
                         avio_closep(outputContext.pb());
                     }
