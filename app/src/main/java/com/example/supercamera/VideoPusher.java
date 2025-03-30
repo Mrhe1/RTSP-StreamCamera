@@ -134,6 +134,7 @@ public class VideoPusher {
 
     public void startPush() {
         if(!setState(PushState.STARTING)) return;
+
             try {
                 startStreamEncoder(width, height, fps, Bitrate);
                 setupEventHandlers();
