@@ -134,22 +134,14 @@ public class VideoPusher {
 
     public void startPush() {
         if(!setState(PushState.STARTING)) return;
-
-        // 使用 RxJava 切换到 IO 线程
-        Disposable disposable = Observable.fromCallable(() -> {
-                    startStreamEncoder(width, height, fps, Bitrate);
-                    setupEventHandlers();
-                    return true;
-                })
-                .subscribeOn(Schedulers.io())
-                .subscribe(
-                        success -> Timber.d("推流启动成功"),
-                        throwable -> {
-                            Timber.e(throwable, "推流启动失败");
-                            setState(PushState.ERROR);
-                        }
-                );
-        compositeDisposable.add(disposable);
+            try {
+                startStreamEncoder(width, height, fps, Bitrate);
+                setupEventHandlers();
+                Timber.d("推流启动成功");
+            } catch (Exception e) {
+                Timber.e(e, "推流启动失败");
+                setState(PushState.ERROR);
+            }
     }
 
     public void stopPush() {
@@ -200,34 +192,36 @@ public class VideoPusher {
             );
             format.setInteger(MediaFormat.KEY_BIT_RATE, bitrate * 1000);
             format.setInteger(MediaFormat.KEY_FRAME_RATE, fps);
-            //format.setInteger(MediaFormat.KEY_COLOR_FORMAT,
-            //MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
+            format.setInteger(MediaFormat.KEY_COLOR_FORMAT,
+            MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
             format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1);
+            format.setInteger(MediaFormat.KEY_BITRATE_MODE,
+                    MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR);
+            format.setInteger("max-bitrate", (int)(Bitrate * 1.5 * 1000));
+            format.setInteger("video-bitrate-range", Bitrate*1000);
 
             // MTK芯片需要特殊参数
-            format.setInteger("vendor.mediatek.videoenc.force-venc-profile",
-                    MediaCodecInfo.CodecProfileLevel.AVCProfileHigh);
-            format.setInteger("vendor.mediatek.feature.tile-encoding", 1); // 启用Tile编码
-            format.setInteger("vendor.mediatek.videoenc.tile-dimension-columns", 4);
-            format.setInteger("vendor.mediatek.videoenc.tile-dimension-rows", 2);
+            format.setInteger(MediaFormat.KEY_PROFILE,
+                    MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline);
+            //format.setInteger("vendor.mediatek.feature.tile-encoding", 1); // 启用Tile编码
+            //format.setInteger("vendor.mediatek.videoenc.tile-dimension-columns", 4);
+            //format.setInteger("vendor.mediatek.videoenc.tile-dimension-rows", 2);
 
             // 替换颜色格式
-            format.setInteger(MediaFormat.KEY_COLOR_FORMAT,
-                    MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible);
+            //format.setInteger(MediaFormat.KEY_COLOR_FORMAT,
+                    //MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible);
 
             // 添加数据空间定义
-            format.setInteger(MediaFormat.KEY_COLOR_STANDARD,
-                    MediaFormat.COLOR_STANDARD_BT709);
-            format.setInteger(MediaFormat.KEY_COLOR_RANGE,
-                    MediaFormat.COLOR_RANGE_LIMITED);
-            format.setInteger(MediaFormat.KEY_COLOR_TRANSFER,
-                    MediaFormat.COLOR_TRANSFER_SDR_VIDEO);
+            //format.setInteger(MediaFormat.KEY_COLOR_STANDARD,
+                    //MediaFormat.COLOR_STANDARD_BT709);
+            //format.setInteger(MediaFormat.KEY_COLOR_RANGE,
+                    //MediaFormat.COLOR_RANGE_LIMITED);
+            //format.setInteger(MediaFormat.KEY_COLOR_TRANSFER,
+                    //MediaFormat.COLOR_TRANSFER_SDR_VIDEO);
 
 
             videoEncoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC);
             videoEncoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
-
-            Timber.tag(TAGcodec).d("编码器 Surface 已准备");
 
             //异步回调
             videoEncoder.setCallback(new MediaCodec.Callback() {
@@ -317,6 +311,7 @@ public class VideoPusher {
 
             // 2. 提前创建 Surface
             inputSurface = videoEncoder.createInputSurface();
+            Timber.tag(TAGcodec).d("编码器 Surface 已准备");
             videoEncoder.start(); // 启动编码器但不立即开始录制
 
         } catch (Exception e) {
