@@ -4,9 +4,7 @@ import org.bytedeco.ffmpeg.avcodec.*;
 import org.bytedeco.ffmpeg.avformat.*;
 import org.bytedeco.ffmpeg.avutil.*;
 import org.bytedeco.javacpp.BytePointer;
-import org.bytedeco.javacpp.Pointer;
 import org.bytedeco.javacpp.PointerPointer;
-import org.bytedeco.javacpp.PointerScope;
 
 import static org.bytedeco.ffmpeg.global.avcodec.AV_PKT_FLAG_KEY;
 import static org.bytedeco.ffmpeg.global.avcodec.av_new_packet;
@@ -19,7 +17,6 @@ import static org.bytedeco.ffmpeg.global.avformat.AVIO_FLAG_WRITE;
 import static org.bytedeco.ffmpeg.global.avformat.av_guess_format;
 import static org.bytedeco.ffmpeg.global.avformat.av_interleaved_write_frame;
 import static org.bytedeco.ffmpeg.global.avformat.av_write_trailer;
-import static org.bytedeco.ffmpeg.global.avformat.avformat_alloc_context;
 import static org.bytedeco.ffmpeg.global.avformat.avformat_alloc_output_context2;
 import static org.bytedeco.ffmpeg.global.avformat.avformat_free_context;
 import static org.bytedeco.ffmpeg.global.avformat.avformat_network_init;
@@ -34,7 +31,6 @@ import static org.bytedeco.ffmpeg.global.avformat.avio_open2;
 import static org.bytedeco.ffmpeg.global.avutil.AV_NOPTS_VALUE;
 import static org.bytedeco.ffmpeg.global.avutil.av_dict_free;
 import static org.bytedeco.ffmpeg.global.avutil.av_dict_set;
-import static org.bytedeco.ffmpeg.global.avutil.av_free;
 import static org.bytedeco.ffmpeg.global.avutil.av_malloc;
 import static org.bytedeco.ffmpeg.global.avutil.av_rescale_q;
 import static org.bytedeco.ffmpeg.global.avutil.av_strerror;
@@ -48,10 +44,8 @@ import io.reactivex.rxjava3.schedulers.Schedulers;
 import io.reactivex.rxjava3.subjects.PublishSubject;
 import timber.log.Timber;
 
-import java.nio.Buffer;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -91,6 +85,13 @@ public class FFmpegPusher {
         private AtomicDouble curPushFailureRate = new AtomicDouble(0);
         private AtomicDouble pushFailureRate = new AtomicDouble(0);
         private AtomicBoolean ifNeedReconnect = new AtomicBoolean(false);
+        static List<Long> capturedTimestampList = Collections.synchronizedList(new ArrayList<>());
+        static List<Long> encodedTimestampList = Collections.synchronizedList(new ArrayList<>());
+        static List<Long> pushedTimestampList = Collections.synchronizedList(new ArrayList<>());
+        // between capturedTimestampList and encodedTimestampList
+        static List<Long> latency1List = Collections.synchronizedList(new ArrayList<>());
+        // between encodedTimestampList and pushedTimestampList
+        static List<Long> latency2List = Collections.synchronizedList(new ArrayList<>());
         private PingHelper pingHelper;
         private ScheduledExecutorService executor;
 
@@ -161,6 +162,12 @@ public class FFmpegPusher {
             }
         }
 
+        public enum TimeStampStyle {
+            Captured,
+            Encoded,
+            Pushed
+        }
+
         public void startPushStatistics(int intervalSeconds,
                                         int pingIntervalSeconds, String url,
                                         double pushFailureRateSet){
@@ -216,20 +223,54 @@ public class FFmpegPusher {
             int currentBitrate = size*8/1024;//kbps
             curPushFailureRate.set(Math.round(ErrorFrameNum/frameList.size() * 100.0) / 100.0);
 
-            reportSubject.onNext(new VideoPusher.PushReport(
-                    VideoPusher.EventType.Statistics, 0, "推流统计回调",
-                    currentBitrate, rtt.get(),  curPushFailureRate.get()));
-
             if(curPushFailureRate.get() > pushFailureRate.get()){
                 ifNeedReconnect.set(true);
             }else ifNeedReconnect.set(false);
 
             frameList.clear();
+
+            Long latency1 = 0L;
+            Long latency2 = 0L;
+            for (Long latency : latency1List) {
+                latency1 += latency;
+            }
+            for (Long latency : latency1List) {
+                latency2 += latency;
+            }
+            int hallLatency = (int) ((latency1 / latency1List.size()) + (latency2 / latency2List.size()));
+
+            reportSubject.onNext(new VideoPusher.PushReport(
+                    VideoPusher.EventType.Statistics, 0, "推流统计回调",
+                    currentBitrate, rtt.get(),  curPushFailureRate.get(), hallLatency));
         }
 
         // 判断是否需要重连（可指定pushFrame出现Error的比例超过pushFailureRate就重连）
         public boolean ifNeedReconnect(){
             return ifNeedReconnect.get();
+        }
+
+        public static void reportTimestamp(TimeStampStyle timeStampStyle, long timestamp) {
+            switch (timeStampStyle) {
+                case Captured -> { capturedTimestampList.add(timestamp);}
+                case Encoded -> {
+                    encodedTimestampList.add(timestamp);
+                    for (int i = capturedTimestampList.size() - 1; i >= 0; i++){
+                        if (capturedTimestampList.get(i) < timestamp &&
+                                timestamp - capturedTimestampList.get(i) <= 33) {
+                            latency1List.add(timestamp - capturedTimestampList.get(i));
+                        }
+                    }
+                }
+                case Pushed -> {
+                    pushedTimestampList.add(timestamp);
+                    for (int i = pushedTimestampList.size() - 1; i >= 0; i++) {
+                        if (pushedTimestampList.get(i) < timestamp &&
+                                timestamp - pushedTimestampList.get(i) <= 33) {
+                            latency1List.add(timestamp - pushedTimestampList.get(i));
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -314,6 +355,9 @@ public class FFmpegPusher {
                 pkt.flags(flags);
 
                 ret = av_interleaved_write_frame(outputContext, pkt);
+
+                // 记录发送时间戳（纳秒）
+                PushStatistics.reportTimestamp(PushStatistics.TimeStampStyle.Pushed, System.nanoTime());
                 if (ret < 0) {
                     isSuccess = false;
                     Timber.tag(TAG).e("帧写入失败: %d", ret);
@@ -568,14 +612,14 @@ public class FFmpegPusher {
     {
         reportSubject.onNext(new VideoPusher.PushReport(
                 VideoPusher.EventType.ERROR, code,
-                msg,0,0, 0));
+                msg,0,0, 0,0));
     }
 
     private void reportReconnection(int code, String msg)
     {
         reportSubject.onNext(new VideoPusher.PushReport(
                 VideoPusher.EventType.RECONNECTION, code,
-                msg,0,0, 0));
+                msg,0,0, 0, 0));
     }
 
     public PublishSubject<VideoPusher.PushReport> getReportSubject() {

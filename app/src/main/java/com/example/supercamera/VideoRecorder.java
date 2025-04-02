@@ -102,9 +102,7 @@ public class VideoRecorder {
                     videoEncoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC);
                     videoEncoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
 
-                Timber.tag(TAG).d("编码器 Surface 已准备");
-
-                //异步回调
+                    //异步回调
                     videoEncoder.setCallback(new MediaCodec.Callback() {
                         private volatile boolean muxerStarted = false;
 
@@ -177,8 +175,9 @@ public class VideoRecorder {
                     }, codecHandler);
 
                 // 2. 提前创建 Surface
-                    inputSurface = videoEncoder.createInputSurface();
-                    videoEncoder.start(); // 启动编码器但不立即开始录制
+                inputSurface = videoEncoder.createInputSurface();
+                Timber.tag(TAG).d("编码器 Surface 已准备");
+                videoEncoder.start(); // 启动编码器但不立即开始录制
 
                 isRecording.set(true);
 

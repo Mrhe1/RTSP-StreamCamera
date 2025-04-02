@@ -9,8 +9,8 @@ import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraDevice;
 import android.hardware.camera2.CameraManager;
 import android.hardware.camera2.CaptureRequest;
+import android.hardware.camera2.TotalCaptureResult;
 import android.hardware.camera2.params.StreamConfigurationMap;
-import android.media.ImageReader;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
@@ -778,6 +778,21 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
 
                         Timber.tag(TAGCamera).i("摄像头初始化成功");
                         checker.onStarted(onStartedCheck.StartPart.CAMERA, true);
+
+                        cameraCaptureSession.setRepeatingRequest(requestBuilder.build(),
+                                new CameraCaptureSession.CaptureCallback() {
+                                    @Override
+                                    public void onCaptureCompleted(@NonNull CameraCaptureSession session,
+                                                                   @NonNull CaptureRequest request,
+                                                                   @NonNull TotalCaptureResult result) {
+                                        // 记录采集时间戳（纳秒）
+                                        long captureTimeNs = System.nanoTime();
+                                        FFmpegPusher.PushStatistics.reportTimestamp(FFmpegPusher.PushStatistics.TimeStampStyle.Captured
+                                                , captureTimeNs);
+                                    }
+                                },
+                                cameraHandler
+                        );
                     } catch (CameraAccessException e) {
                         handleCameraError(ERROR_CAMERA_SERVICE);
                     }
@@ -787,6 +802,7 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
                 public void onConfigureFailed(@NonNull CameraCaptureSession session) {
                     handleCameraError(ERROR_CAMERA_DEVICE);
                 }
+
             }, cameraHandler);
         } catch (CameraAccessException e) {
             handleCameraError(ERROR_CAMERA_SERVICE);
@@ -900,7 +916,7 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
                 }
             });
 
-            // 按正确顺序释放资源
+            // 释放资源
             if (cameraCaptureSession != null) {
                 cameraCaptureSession.abortCaptures();
                 cameraCaptureSession.close();

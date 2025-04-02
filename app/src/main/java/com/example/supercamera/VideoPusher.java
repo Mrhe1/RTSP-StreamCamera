@@ -22,10 +22,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
-import io.reactivex.rxjava3.core.Observable;
 import io.reactivex.rxjava3.disposables.CompositeDisposable;
 import io.reactivex.rxjava3.disposables.Disposable;
 import io.reactivex.rxjava3.schedulers.Schedulers;
@@ -79,15 +77,17 @@ public class VideoPusher {
         public final int BitrateNow;
         public final int rtt;
         public final double pushFailureRate;
+        public final int hallLatency;
 
         public PushReport(EventType type, int code, String message,
-                          int BitrateNow, int rtt, double pushFailureRate) {
+                          int BitrateNow, int rtt, double pushFailureRate, int hallLatency) {
             this.type = type;
             this.code = code;
             this.message = message;
             this.BitrateNow = BitrateNow;
             this.rtt = rtt;
             this.pushFailureRate = pushFailureRate;
+            this.hallLatency = hallLatency;
         }
     }
 
@@ -135,14 +135,14 @@ public class VideoPusher {
     public void startPush() {
         if(!setState(PushState.STARTING)) return;
 
-            try {
-                startStreamEncoder(width, height, fps, Bitrate);
-                setupEventHandlers();
-                Timber.d("推流启动成功");
-            } catch (Exception e) {
-                Timber.e(e, "推流启动失败");
-                setState(PushState.ERROR);
-            }
+        try {
+            startStreamEncoder(width, height, fps, Bitrate);
+            setupEventHandlers();
+            Timber.d("推流启动成功");
+        } catch (Exception e) {
+            Timber.e(e, "推流启动失败");
+            setState(PushState.ERROR);
+        }
     }
 
     public void stopPush() {
@@ -263,7 +263,7 @@ public class VideoPusher {
                                 reportSubject.onNext(new PushReport(
                                         EventType.PUSH_STARTED,
                                         0,"推流开始成功", 0,
-                                        0,0));
+                                        0,0 ,0));
                             } catch (Exception e) {
                                 String msg = String.format("ffmpeg初始化失败:%s",e.getMessage());
                                 Timber.tag(TAG).e(msg);
@@ -282,6 +282,9 @@ public class VideoPusher {
                         }
 
                         try {
+                            // 记录编码时间戳（纳秒）
+                            FFmpegPusher.PushStatistics.reportTimestamp(FFmpegPusher.PushStatistics.TimeStampStyle.Encoded
+                            , bufferInfo.presentationTimeUs);
                             // 时间戳修正
                             if (bufferInfo.presentationTimeUs <= lastPresentationTimeUs) {
                                 bufferInfo.presentationTimeUs = lastPresentationTimeUs + 1000000 / fps;
@@ -418,7 +421,7 @@ public class VideoPusher {
     {
         reportSubject.onNext(new PushReport(
                 EventType.ERROR, code,
-                msg,0,0, 0));
+                msg,0,0, 0, 0));
     }
 
     public PublishSubject<PushReport> getReportSubject() {
@@ -431,7 +434,7 @@ public class VideoPusher {
                 .subscribe(report -> {
                     reportSubject.onNext(new PushReport(report.type,report.code
                     ,"FFmpegPusher:" + report.message, report.BitrateNow,
-                            report.rtt, report.pushFailureRate));
+                            report.rtt, report.pushFailureRate, report.hallLatency));
                 });
         compositeDisposable.add(disposable);
     }
