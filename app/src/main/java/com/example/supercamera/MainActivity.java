@@ -301,7 +301,7 @@ public class MainActivity extends AppCompatActivity {
         int record_height = 1440;
         int record_bitrate = 5000;//单位kbps
         int record_fps =30;
-        String push_Url = "rtsp://8.137.9.238:1521/live/stream";
+        String push_Url = "rtsp://47.109.148.245:1521/live/stream";
 
         if(currentState.get() != WorkflowState.READY)
         {
@@ -1043,7 +1043,7 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
     private void handleStatistics(VideoPusher.PushReport report) {
         int dropRate = (int)report.pushFailureRate * 100;
         Timber.tag(TAG).i("推流统计回调：当前码率：%dkbps; 网络延迟rtt：%dms; " +
-                        "丢包率：%d%%",report.BitrateNow, report.rtt, dropRate);
+                        "丢包率：%d%%; 推流总延迟：%dms",report.BitrateNow, report.rtt, dropRate, report.totalLatency);
     }
 
     private void handleRecordError(VideoRecorder.RecordReport report)

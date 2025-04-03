@@ -77,17 +77,17 @@ public class VideoPusher {
         public final int BitrateNow;
         public final int rtt;
         public final double pushFailureRate;
-        public final int hallLatency;
+        public final int totalLatency;
 
         public PushReport(EventType type, int code, String message,
-                          int BitrateNow, int rtt, double pushFailureRate, int hallLatency) {
+                          int BitrateNow, int rtt, double pushFailureRate, int totalLatency) {
             this.type = type;
             this.code = code;
             this.message = message;
             this.BitrateNow = BitrateNow;
             this.rtt = rtt;
             this.pushFailureRate = pushFailureRate;
-            this.hallLatency = hallLatency;
+            this.totalLatency = totalLatency;
         }
     }
 
@@ -284,7 +284,7 @@ public class VideoPusher {
                         try {
                             // 记录编码时间戳（纳秒）
                             FFmpegPusher.PushStatistics.reportTimestamp(FFmpegPusher.PushStatistics.TimeStampStyle.Encoded
-                            , bufferInfo.presentationTimeUs);
+                            , bufferInfo.presentationTimeUs * 1000L);
                             // 时间戳修正
                             if (bufferInfo.presentationTimeUs <= lastPresentationTimeUs) {
                                 bufferInfo.presentationTimeUs = lastPresentationTimeUs + 1000000 / fps;
@@ -434,7 +434,7 @@ public class VideoPusher {
                 .subscribe(report -> {
                     reportSubject.onNext(new PushReport(report.type,report.code
                     ,"FFmpegPusher:" + report.message, report.BitrateNow,
-                            report.rtt, report.pushFailureRate, report.hallLatency));
+                            report.rtt, report.pushFailureRate, report.totalLatency));
                 });
         compositeDisposable.add(disposable);
     }

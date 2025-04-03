@@ -229,19 +229,24 @@ public class FFmpegPusher {
 
             frameList.clear();
 
-            Long latency1 = 0L;
-            Long latency2 = 0L;
-            for (Long latency : latency1List) {
-                latency1 += latency;
+            int totalLatency = -1;
+            if(latency1List.size() >= 2 && latency2List.size() >= 2) {
+                Long latency1 = 0L;
+                Long latency2 = 0L;
+                for (Long latency : latency1List) {
+                    latency1 += latency;
+                }
+                for (Long latency : latency1List) {
+                    latency2 += latency;
+                }
+                totalLatency = (int) (((latency1 / latency1List.size()) + (latency2 / latency2List.size())) / 1_000_000L);
+                latency1List.subList(0, latency1List.size() - 2).clear();
+                latency2List.subList(0, latency2List.size() - 2).clear();
             }
-            for (Long latency : latency1List) {
-                latency2 += latency;
-            }
-            int hallLatency = (int) ((latency1 / latency1List.size()) + (latency2 / latency2List.size()));
 
             reportSubject.onNext(new VideoPusher.PushReport(
                     VideoPusher.EventType.Statistics, 0, "推流统计回调",
-                    currentBitrate, rtt.get(),  curPushFailureRate.get(), hallLatency));
+                    currentBitrate, rtt.get(),  curPushFailureRate.get(), totalLatency));
         }
 
         // 判断是否需要重连（可指定pushFrame出现Error的比例超过pushFailureRate就重连）
@@ -250,23 +255,26 @@ public class FFmpegPusher {
         }
 
         public static void reportTimestamp(TimeStampStyle timeStampStyle, long timestamp) {
+            if(VideoPusher.currentState.get() != VideoPusher.PushState.PUSHING) return;
             switch (timeStampStyle) {
                 case Captured -> { capturedTimestampList.add(timestamp);}
                 case Encoded -> {
                     encodedTimestampList.add(timestamp);
-                    for (int i = capturedTimestampList.size() - 1; i >= 0; i++){
+                    for (int i = capturedTimestampList.size() - 1; i >= 0; i--){
                         if (capturedTimestampList.get(i) < timestamp &&
-                                timestamp - capturedTimestampList.get(i) <= 33) {
+                                timestamp - capturedTimestampList.get(i) <= 33_000_000L) {
                             latency1List.add(timestamp - capturedTimestampList.get(i));
+                            break;
                         }
                     }
                 }
                 case Pushed -> {
                     pushedTimestampList.add(timestamp);
-                    for (int i = pushedTimestampList.size() - 1; i >= 0; i++) {
+                    for (int i = pushedTimestampList.size() - 1; i >= 0; i--) {
                         if (pushedTimestampList.get(i) < timestamp &&
-                                timestamp - pushedTimestampList.get(i) <= 33) {
-                            latency1List.add(timestamp - pushedTimestampList.get(i));
+                                timestamp - pushedTimestampList.get(i) <= 33_000_000L) {
+                            latency2List.add(timestamp - pushedTimestampList.get(i));
+                            break;
                         }
                     }
                 }
@@ -462,7 +470,7 @@ public class FFmpegPusher {
                 av_dict_set(options, "rtsp_transport", "tcp", 0);
                 av_dict_set(options, "max_delay", "200000", 0);
                 av_dict_set(options, "tune", "zerolatency", 0);
-                av_dict_set(options, "timeout", "5000000", 0); // 5秒超时\
+                //av_dict_set(options, "timeout", "5000000", 0); // 5秒超时\
                 av_dict_set(options, "f", "rtsp", 0);
 
                 // 5. 打开输出
@@ -487,7 +495,7 @@ public class FFmpegPusher {
 
                 // 7. 开始统计帧数据
                 statistics = new PushStatistics();
-                statistics.startPushStatistics(2, 4,
+                statistics.startPushStatistics(4, 6,
                         url, 0.4);
 
             } catch (Exception e) {
