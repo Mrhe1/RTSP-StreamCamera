@@ -44,7 +44,7 @@ public class VideoPusher {
     private final Object dimensionLock = new Object();
     private Surface inputSurface; //Surface成员
     private long lastPresentationTimeUs = 0;
-    private final ExecutorService encoderExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService encoderExecutor = Executors.newFixedThreadPool(5);
     private final PublishSubject<PushReport> reportSubject = PublishSubject.create();
     private AVCodecParameters params = avcodec_parameters_alloc();
     private final CompositeDisposable compositeDisposable = new CompositeDisposable();
@@ -282,9 +282,10 @@ public class VideoPusher {
                         }
 
                         try {
+                            Long encodedTime = System.nanoTime();
                             // 记录编码时间戳（纳秒）
                             FFmpegPusher.PushStatistics.reportTimestamp(FFmpegPusher.PushStatistics.TimeStampStyle.Encoded
-                            , bufferInfo.presentationTimeUs * 1000L);
+                            , encodedTime);
                             // 时间戳修正
                             if (bufferInfo.presentationTimeUs <= lastPresentationTimeUs) {
                                 bufferInfo.presentationTimeUs = lastPresentationTimeUs + 1000000 / fps;
@@ -292,7 +293,7 @@ public class VideoPusher {
                             lastPresentationTimeUs = bufferInfo.presentationTimeUs;
 
                             encoderExecutor.submit(() ->
-                                    pusher.pushFrame(outputBuffer, bufferInfo));
+                                    pusher.pushFrame(outputBuffer, bufferInfo, encodedTime));
                         } catch (Exception e) {
                             Timber.tag(TAGcodec).e("写入数据失败: %s", e.getMessage());
                         } finally {

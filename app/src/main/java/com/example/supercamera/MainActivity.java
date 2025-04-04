@@ -292,7 +292,7 @@ public class MainActivity extends AppCompatActivity {
         int push_width = 1280;
         int push_height = 720;
         int push_fps = 30;//**现阶段push——fps必须============record——fps**&*&&&&
-        int push_initAvgBitrate = 1500;//单位kbps
+        int push_initAvgBitrate = 2200;//单位kbps
         int push_initMaxBitrate = 2500;
         int push_initMinBitrate = 1000;
         StabilizationMode push_StabilizationMode = StabilizationMode.OFF;//防抖

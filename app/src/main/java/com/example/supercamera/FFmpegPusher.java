@@ -1,5 +1,6 @@
 package com.example.supercamera;
 
+import org.apache.commons.collections4.queue.CircularFifoQueue;
 import org.bytedeco.ffmpeg.avcodec.*;
 import org.bytedeco.ffmpeg.avformat.*;
 import org.bytedeco.ffmpeg.avutil.*;
@@ -24,10 +25,6 @@ import static org.bytedeco.ffmpeg.global.avformat.avformat_new_stream;
 import static org.bytedeco.ffmpeg.global.avformat.avformat_write_header;
 import static org.bytedeco.ffmpeg.global.avformat.avio_alloc_context;
 import static org.bytedeco.ffmpeg.global.avformat.avio_closep;
-import static org.bytedeco.ffmpeg.global.avformat.avio_context_free;
-import static org.bytedeco.ffmpeg.global.avformat.avio_enum_protocols;
-import static org.bytedeco.ffmpeg.global.avformat.avio_open;
-import static org.bytedeco.ffmpeg.global.avformat.avio_open2;
 import static org.bytedeco.ffmpeg.global.avutil.AV_NOPTS_VALUE;
 import static org.bytedeco.ffmpeg.global.avutil.av_dict_free;
 import static org.bytedeco.ffmpeg.global.avutil.av_dict_set;
@@ -48,6 +45,8 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import com.google.common.util.concurrent.AtomicDouble;
@@ -57,7 +56,6 @@ import com.stealthcopter.networktools.ping.PingStats;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -80,20 +78,21 @@ public class FFmpegPusher {
     private final PublishSubject<VideoPusher.PushReport> reportSubject = PublishSubject.create();
 
     public class PushStatistics{
-        List<FrameInfo> frameList = Collections.synchronizedList(new ArrayList<>());
-        private AtomicInteger rtt = new AtomicInteger(0);
+        private List<FrameInfo> frameList = Collections.synchronizedList(new ArrayList<>());
+        //private AtomicInteger rtt = new AtomicInteger(0);
+        Queue<Integer> rtt = new CircularFifoQueue<Integer>(3);
+        //private Queue<Integer> rtt = new ConcurrentLinkedQueue<>();
         private AtomicDouble curPushFailureRate = new AtomicDouble(0);
         private AtomicDouble pushFailureRate = new AtomicDouble(0);
         private AtomicBoolean ifNeedReconnect = new AtomicBoolean(false);
         static List<Long> capturedTimestampList = Collections.synchronizedList(new ArrayList<>());
-        static List<Long> encodedTimestampList = Collections.synchronizedList(new ArrayList<>());
-        static List<Long> pushedTimestampList = Collections.synchronizedList(new ArrayList<>());
         // between capturedTimestampList and encodedTimestampList
         static List<Long> latency1List = Collections.synchronizedList(new ArrayList<>());
         // between encodedTimestampList and pushedTimestampList
         static List<Long> latency2List = Collections.synchronizedList(new ArrayList<>());
         private PingHelper pingHelper;
         private ScheduledExecutorService executor;
+        private int intervalSeconds;
 
         public final class FrameInfo {
             private final boolean isPushFrameSuccess;
@@ -140,10 +139,15 @@ public class FFmpegPusher {
                     @Override
                     public void onResult(com.stealthcopter.networktools.ping.PingResult pingResult) {
                         if(pingResult.isReachable){
-                            rtt.set((int)Math.round(pingResult.timeTaken));
-                            Timber.tag(TAG).i("ping成功，rtt：%d", rtt.get());
+                            int currentRTT = (int)Math.round(pingResult.timeTaken);
+                            synchronized (rtt) {
+                                rtt.add(currentRTT);
+                            }
+                            Timber.tag(TAG).i("ping成功，rtt：%d", currentRTT);
                         }else{
-                            rtt.set(-1);
+                            synchronized (rtt) {
+                                rtt.add(-1);
+                            }
                             Timber.tag(TAG).e("ping失败");
                         }
                     }
@@ -155,7 +159,9 @@ public class FFmpegPusher {
 
                     @Override
                     public void onError(Exception e) {
-                        rtt.set(-1);
+                        synchronized (rtt) {
+                            rtt.add(-1);
+                        }
                         Timber.tag(TAG).e("ping失败");
                     }
                 });
@@ -171,6 +177,7 @@ public class FFmpegPusher {
         public void startPushStatistics(int intervalSeconds,
                                         int pingIntervalSeconds, String url,
                                         double pushFailureRateSet){
+            this.intervalSeconds = intervalSeconds;
             pushFailureRate.set(pushFailureRateSet);
             // 获取host地址
             String host = null;
@@ -209,44 +216,112 @@ public class FFmpegPusher {
             frameList.add(new FrameInfo(isSuccess, size));
         }
 
-        private void  reportPushStatistics(){
-            if(VideoPusher.currentState.get() != VideoPusher.PushState.PUSHING) {
-                return;
-            }
-
-            int ErrorFrameNum = 0;
-            int size = 0;
-            for(FrameInfo frame : frameList){
-                if(!frame.getIfPushFrameSuccess()) ErrorFrameNum++;
-                size += frame.getFrameSize();
-            }
-            int currentBitrate = size*8/1024;//kbps
-            curPushFailureRate.set(Math.round(ErrorFrameNum/frameList.size() * 100.0) / 100.0);
-
-            if(curPushFailureRate.get() > pushFailureRate.get()){
-                ifNeedReconnect.set(true);
-            }else ifNeedReconnect.set(false);
-
-            frameList.clear();
-
-            int totalLatency = -1;
-            if(latency1List.size() >= 2 && latency2List.size() >= 2) {
-                Long latency1 = 0L;
-                Long latency2 = 0L;
-                for (Long latency : latency1List) {
-                    latency1 += latency;
+        private void reportPushStatistics() {
+            try {
+                if (VideoPusher.currentState.get() != VideoPusher.PushState.PUSHING) {
+                    return;
                 }
-                for (Long latency : latency1List) {
-                    latency2 += latency;
-                }
-                totalLatency = (int) (((latency1 / latency1List.size()) + (latency2 / latency2List.size())) / 1_000_000L);
-                latency1List.subList(0, latency1List.size() - 2).clear();
-                latency2List.subList(0, latency2List.size() - 2).clear();
-            }
 
-            reportSubject.onNext(new VideoPusher.PushReport(
-                    VideoPusher.EventType.Statistics, 0, "推流统计回调",
-                    currentBitrate, rtt.get(),  curPushFailureRate.get(), totalLatency));
+                // 同步访问frameList
+                List<FrameInfo> localFrameList;
+                synchronized (frameList) {
+                    if (frameList.isEmpty()) {
+                        Timber.tag(TAG).d("无帧数据，跳过统计");
+                        return;
+                    }
+                    localFrameList = new ArrayList<>(frameList);
+                    frameList.clear();
+                }
+
+                // 计算错误帧和码率
+                int ErrorFrameNum = 0;
+                int size = 0;
+                for (FrameInfo frame : localFrameList) {
+                    if (!frame.getIfPushFrameSuccess()) ErrorFrameNum++;
+                    size += frame.getFrameSize();
+                }
+                int currentBitrate = size * 8 / 1024 / intervalSeconds; //kbps
+                double failureRate = (double) ErrorFrameNum / localFrameList.size();
+                curPushFailureRate.set(Math.round(failureRate * 100.0) / 100.0);
+
+                ifNeedReconnect.set(curPushFailureRate.get() > pushFailureRate.get());
+
+                // 延迟计算
+                int totalLatency = -1;
+                try {
+                    if (!latency1List.isEmpty() && !latency2List.isEmpty()) {
+                        long latency1Sum = 0;
+                        long latency2Sum = 0;
+                        long avgLatency1 = 0; // ns
+                        long avgLatency2 = 0; // ns
+                        int avgLatency3 = 0; // ms
+                        int rttSum = -1;
+                        int avgRTT = -1;
+                        synchronized (latency1List) {
+                            for (Long latency : latency1List) {
+                                latency1Sum += latency;
+                            }
+                            avgLatency1 = latency1Sum / latency1List.size();
+                        }
+
+                        synchronized (latency2List) {
+                            for (Long latency : latency2List) {
+                                latency2Sum += latency;
+                            }
+                            avgLatency2 = latency2Sum / latency2List.size();
+                        }
+
+                        synchronized (rtt) {
+                            if (!rtt.isEmpty()) {
+                                int num = 0;
+                                for (int singleRTT : rtt) {
+                                    if (singleRTT == -1) return;
+                                    rttSum += singleRTT;
+                                    num++;
+                                }
+                                if (num > 0) {
+                                    avgRTT = rttSum / rtt.size();
+                                }
+                            }
+                        }
+
+                        // 用rtt和帧大小估算I/O延迟,按上行带宽15mbps算,加5ms的tcp额外开销
+                        avgLatency3 = avgRTT +  currentBitrate /1024/fps/15 + 5;
+                        totalLatency = ((int) ((avgLatency1 + avgLatency2) / 1_000_000L)) + avgLatency3;
+
+                        Timber.tag(TAG).d("平均延迟计算完成: L1=%dms, L2=%dms ,L3=%dms",
+                                (int)(avgLatency1 / 1_000_000L),
+                                (int)(avgLatency2 / 1_000_000L), avgLatency3);
+                    }
+                } catch (Exception e) {
+                    Timber.tag(TAG).e(e, "延迟计算异常");
+                } finally {
+                    latency1List.clear();
+                    latency2List.clear();
+                }
+
+                // 时间戳清理
+                synchronized (capturedTimestampList) {
+                    if (capturedTimestampList.size() >= 2) {
+                        capturedTimestampList.subList(0, capturedTimestampList.size() - 2).clear();
+                    }
+                }
+
+                // 获取最后一次的rtt
+                int currentRTT = -1;
+                synchronized (rtt) {
+                    if (!rtt.isEmpty()) {
+                        currentRTT = ((CircularFifoQueue<Integer>) rtt).get(rtt.size() - 1);
+                    }
+                }
+
+                reportSubject.onNext(new VideoPusher.PushReport(
+                        VideoPusher.EventType.Statistics, 0, "推流统计回调",
+                        currentBitrate, currentRTT, curPushFailureRate.get(), totalLatency));
+
+            } catch (Exception e) {
+                Timber.tag(TAG).e(e, "统计任务异常");
+            }
         }
 
         // 判断是否需要重连（可指定pushFrame出现Error的比例超过pushFailureRate就重连）
@@ -259,7 +334,7 @@ public class FFmpegPusher {
             switch (timeStampStyle) {
                 case Captured -> { capturedTimestampList.add(timestamp);}
                 case Encoded -> {
-                    encodedTimestampList.add(timestamp);
+                    //encodedTimestampList.add(timestamp);
                     for (int i = capturedTimestampList.size() - 1; i >= 0; i--){
                         if (capturedTimestampList.get(i) < timestamp &&
                                 timestamp - capturedTimestampList.get(i) <= 33_000_000L) {
@@ -268,16 +343,7 @@ public class FFmpegPusher {
                         }
                     }
                 }
-                case Pushed -> {
-                    pushedTimestampList.add(timestamp);
-                    for (int i = pushedTimestampList.size() - 1; i >= 0; i--) {
-                        if (pushedTimestampList.get(i) < timestamp &&
-                                timestamp - pushedTimestampList.get(i) <= 33_000_000L) {
-                            latency2List.add(timestamp - pushedTimestampList.get(i));
-                            break;
-                        }
-                    }
-                }
+                case Pushed -> latency2List.add(timestamp);
             }
         }
     }
@@ -319,7 +385,7 @@ public class FFmpegPusher {
         }
     }
 
-    public void pushFrame(ByteBuffer data, MediaCodec.BufferInfo bufferInfo) {
+    public void pushFrame(ByteBuffer data, MediaCodec.BufferInfo bufferInfo, Long encodedTime) {
         synchronized (initStopLock) {
             if (VideoPusher.currentState.get() != VideoPusher.PushState.PUSHING
                     || (bufferInfo.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
@@ -365,7 +431,7 @@ public class FFmpegPusher {
                 ret = av_interleaved_write_frame(outputContext, pkt);
 
                 // 记录发送时间戳（纳秒）
-                PushStatistics.reportTimestamp(PushStatistics.TimeStampStyle.Pushed, System.nanoTime());
+                PushStatistics.reportTimestamp(PushStatistics.TimeStampStyle.Pushed, System.nanoTime() - encodedTime);
                 if (ret < 0) {
                     isSuccess = false;
                     Timber.tag(TAG).e("帧写入失败: %d", ret);
@@ -374,8 +440,10 @@ public class FFmpegPusher {
                 throw new RuntimeException(e);
             }finally {
                 statistics.setPushStatistics(isSuccess, bufferInfo.size);
-                av_packet_unref(pkt); // 释放数据包
-                av_packet_free(pkt);  // 释放指针内存
+                if (pkt != null) {
+                    av_packet_unref(pkt); // 释放数据包
+                    av_packet_free(pkt);  // 释放指针内存
+                }
             }
         }
     }
