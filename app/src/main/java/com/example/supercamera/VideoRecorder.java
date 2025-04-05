@@ -11,6 +11,7 @@ import androidx.annotation.NonNull;
 import java.nio.ByteBuffer;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import io.reactivex.rxjava3.subjects.PublishSubject;
@@ -212,21 +213,39 @@ public class VideoRecorder {
             if (!isRecording.get()) return;
 
             try {
-                // 1. 发送编码结束信号（仅Surface模式需要）
+                // 1. 发送编码结束信号前等待所有buffer处理
                 if (videoEncoder != null) {
                     videoEncoder.signalEndOfInputStream();
+                    Thread.sleep(50); // 等待50ms确保回调完成
                 }
 
-                // 2. 直接停止编码器
+                // 2. 停止编码器
                 if (videoEncoder != null) {
                     videoEncoder.stop();
                 }
 
-                // 3. 停止并释放Muxer
+                // 3. 停止并释放Muxer（增加状态检查）
                 if (mediaMuxer != null) {
-                    mediaMuxer.stop();
+                    if (isRecording.get()) {
+                        mediaMuxer.stop();
+                    }
                     mediaMuxer.release();
-                    mediaMuxer = null;
+                    mediaMuxer = null; // 必须置空防止重复释放
+                }
+
+                // 4. 关闭线程池
+                if (encoderExecutor != null) {
+                    encoderExecutor.shutdown();
+                    try {
+                        if (!encoderExecutor.awaitTermination(500, TimeUnit.MILLISECONDS)) {
+                            encoderExecutor.shutdownNow();
+                            // 再次等待取消的任务
+                            encoderExecutor.awaitTermination(300, TimeUnit.MILLISECONDS);
+                        }
+                    } catch (InterruptedException e) {
+                        encoderExecutor.shutdownNow();
+                        Thread.currentThread().interrupt();
+                    }
                 }
             } catch (Exception e) {
                 Timber.e("停止录制出错: %s", e.getMessage());

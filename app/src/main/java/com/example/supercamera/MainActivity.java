@@ -93,7 +93,7 @@ public class MainActivity extends AppCompatActivity {
     private static final String TAGWorkflowState = "WorkflowState";
     private final Object startStopLock = new Object();
     private final Object checkPermissionLock = new Object();
-    private volatile boolean ispermitted = false;
+    private volatile boolean isPermitted = false;
     private static final int CAMERA_PERMISSION_REQUEST_CODE = 100;
     //按钮变量
     private Button btnStart;
@@ -227,8 +227,8 @@ public class MainActivity extends AppCompatActivity {
         textureView = findViewById(R.id.textureView);
         textureView.setSurfaceTextureListener(surfaceTextureListener);
 
-        setpermitted(checkCameraPermission());//权限检查
-        if (!ispermitted()) {
+        setPermitted(checkCameraPermission());//权限检查
+        if (!isPermitted()) {
             requestCameraPermission();
         }
 
@@ -307,7 +307,7 @@ public class MainActivity extends AppCompatActivity {
         {
             Timber.tag(TAG).e("无法重复开启工作流");return;
         }
-        if(!ispermitted()) {
+        if(!isPermitted()) {
             requestCameraPermission();
             Timber.tag(TAG).e("权限被拒，工作流无法开始");return;
         }
@@ -967,7 +967,7 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
             //检查结果数组是否非空
             if (grantResults.length > 0) {
                 if (grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                    setpermitted(true);// 权限通过
+                    setPermitted(true);// 权限通过
                     Timber.tag(TAG).i("camera权限通过");
                 } else {
                     Timber.tag(TAG).i("camera权限被拒");// 权限被拒
@@ -1062,14 +1062,14 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
         checker.onStarted(onStartedCheck.StartPart.RECORD, true);
     }
 
-    public boolean ispermitted() {
+    public boolean isPermitted() {
         synchronized (checkPermissionLock) {
-            return ispermitted;
+            return isPermitted;
         }
     }
-    private void setpermitted(boolean permitted) {
+    private void setPermitted(boolean permitted) {
         synchronized (checkPermissionLock) {
-            ispermitted = permitted;
+            isPermitted = permitted;
         }
     }
 
@@ -1115,6 +1115,18 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
     protected void onDestroy() {
         try {
             Stop();
+            if (surfaceTexture != null) {
+                surfaceTexture.release();
+                surfaceTexture = null;
+            }
+            if (previewSurface != null) {
+                previewSurface.release();
+                previewSurface = null;
+            }
+            if (compositeDisposable != null && !compositeDisposable.isDisposed()) {
+                compositeDisposable.dispose();
+                compositeDisposable.clear(); // 强制清理所有订阅
+            }
         } catch (Exception e) {}
         //释放RxJava资源
         if (compositeDisposable != null && !compositeDisposable.isDisposed()) {

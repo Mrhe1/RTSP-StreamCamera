@@ -7,6 +7,7 @@ import static org.bytedeco.ffmpeg.global.avutil.AVMEDIA_TYPE_VIDEO;
 
 import android.media.MediaCodec;
 import android.media.MediaCodecInfo;
+import android.media.MediaCodecList;
 import android.media.MediaFormat;
 import android.os.Handler;
 import android.os.HandlerThread;
@@ -31,7 +32,6 @@ import io.reactivex.rxjava3.subjects.PublishSubject;
 import timber.log.Timber;
 
 public class VideoPusher {
-    private HandlerThread codecThread;
     private final ScheduledExecutorService errorHandler;
     private MediaCodec videoEncoder;
     private static final String TAGcodec = "StreamEncoder";
@@ -44,7 +44,8 @@ public class VideoPusher {
     private final Object dimensionLock = new Object();
     private Surface inputSurface; //Surface成员
     private long lastPresentationTimeUs = 0;
-    private final ExecutorService encoderExecutor = Executors.newFixedThreadPool(5);
+    private final ExecutorService encoderExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService initExecutor = Executors.newSingleThreadExecutor();
     private final PublishSubject<PushReport> reportSubject = PublishSubject.create();
     private AVCodecParameters params = avcodec_parameters_alloc();
     private final CompositeDisposable compositeDisposable = new CompositeDisposable();
@@ -154,16 +155,15 @@ public class VideoPusher {
         pusher.stopPush();
         stopEncoding();
 
-        if(encoderExecutor != null) {
-            // 关闭encoderExecutor线程池
+        if (encoderExecutor != null) {
             encoderExecutor.shutdown();
-        }
-        try {
-            if (!encoderExecutor.awaitTermination(500, TimeUnit.MILLISECONDS)) {
-                encoderExecutor.shutdownNow();
+            try {
+                if (!encoderExecutor.awaitTermination(500, TimeUnit.MILLISECONDS)) {
+                    encoderExecutor.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
             }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
         }
 
         //释放RxJava资源
@@ -184,8 +184,8 @@ public class VideoPusher {
             // 创建带Looper的HandlerThread
             HandlerThread codecThread = new HandlerThread("VideoEncoder-Callback");
             codecThread.start();
+            //codecThread.setPriority(Thread.MAX_PRIORITY); // 最高优先级
             Handler codecHandler = new Handler(codecThread.getLooper());
-
 
             // 1. 提前初始化编码器（H.264）
             MediaFormat format = MediaFormat.createVideoFormat(
@@ -200,26 +200,13 @@ public class VideoPusher {
                     MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR);
             format.setInteger("max-bitrate", (int)(Bitrate * 1.5 * 1000));
             format.setInteger("video-bitrate-range", Bitrate*1000);
-
-            // MTK芯片需要特殊参数
             format.setInteger(MediaFormat.KEY_PROFILE,
                     MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline);
-            //format.setInteger("vendor.mediatek.feature.tile-encoding", 1); // 启用Tile编码
+            //format.setInteger("vendor.mediatek.feature.fast-enable", 1);
+            format.setInteger("vendor.mediatek.feature.tile-encoding", 1); // 启用Tile编码
             //format.setInteger("vendor.mediatek.videoenc.tile-dimension-columns", 4);
             //format.setInteger("vendor.mediatek.videoenc.tile-dimension-rows", 2);
-
-            // 替换颜色格式
-            //format.setInteger(MediaFormat.KEY_COLOR_FORMAT,
-                    //MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible);
-
-            // 添加数据空间定义
-            //format.setInteger(MediaFormat.KEY_COLOR_STANDARD,
-                    //MediaFormat.COLOR_STANDARD_BT709);
-            //format.setInteger(MediaFormat.KEY_COLOR_RANGE,
-                    //MediaFormat.COLOR_RANGE_LIMITED);
-            //format.setInteger(MediaFormat.KEY_COLOR_TRANSFER,
-                    //MediaFormat.COLOR_TRANSFER_SDR_VIDEO);
-
+            //format.setInteger("vendor.mediatek.feature.low-latency", 1);  // 低延迟模式
 
             videoEncoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC);
             videoEncoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
@@ -256,7 +243,8 @@ public class VideoPusher {
                                 AVCodecParameters prt = getEncoderParameters();
                                 // 初始化推流器（确保只执行一次）
                                 if (currentState.get() == PushState.STARTING) {
-                                    pusher.initPusher(configData, prt);
+                                    initExecutor.submit(() ->
+                                        pusher.initPusher(configData, prt));
                                 }
 
                                 setState(PushState.PUSHING);
@@ -292,8 +280,7 @@ public class VideoPusher {
                             }
                             lastPresentationTimeUs = bufferInfo.presentationTimeUs;
 
-                            encoderExecutor.submit(() ->
-                                    pusher.pushFrame(outputBuffer, bufferInfo, encodedTime));
+                            pusher.pushFrame(outputBuffer, bufferInfo, encodedTime);
                         } catch (Exception e) {
                             Timber.tag(TAGcodec).e("写入数据失败: %s", e.getMessage());
                         } finally {
@@ -329,7 +316,7 @@ public class VideoPusher {
     // 获取编码器参数
     private AVCodecParameters getEncoderParameters() {
         if (params == null || params.isNull()) {
-            throw new OutOfMemoryError("无法分配 AVCodecParameters 内存");
+            params = avcodec_parameters_alloc(); // 重新分配
         }
         try {
             params.codec_type(AVMEDIA_TYPE_VIDEO);
@@ -385,9 +372,6 @@ public class VideoPusher {
                 if (params != null && !params.isNull()) {
                     avcodec_parameters_free(params); // 释放参数内存
                     params = null;
-                }
-                if (codecThread != null) {
-                    codecThread.quitSafely();
                 }
             }
         }
