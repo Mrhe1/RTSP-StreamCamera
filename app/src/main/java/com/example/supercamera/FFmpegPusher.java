@@ -427,22 +427,63 @@ public class FFmpegPusher {
                 }
 
                 Timber.tag(TAG).d("2");
-                // 关键步骤：直接操作内存
-                BytePointer dstPtr = pkt.data();
-                BytePointer srcPtr = new BytePointer(data);
+                if (pkt == null || data == null || bufferInfo == null) {
+                    Timber.tag(TAG).w("Invalid null object detected");
+                    return;
+                }
 
-                // 设置拷贝范围前验证position和limit
-                int oldPosition = data.position();
-                int oldLimit = data.limit();
                 try {
-                    data.position(bufferInfo.offset);
-                    data.limit(bufferInfo.offset + bufferInfo.size);
-                    srcPtr.position(bufferInfo.offset).limit(bufferInfo.offset + bufferInfo.size);
-                    dstPtr.put(srcPtr);
-                    Timber.tag(TAG).d("3");
-                } finally {
-                    data.position(oldPosition);
-                    data.limit(oldLimit);
+                    BytePointer dstPtr = pkt.data();
+                    if (dstPtr == null) {
+                        Timber.tag(TAG).w("Packet data is null");
+                        return;
+                    }
+
+                    // 创建临时局部变量避免竞态条件
+                    final int targetOffset = bufferInfo.offset;
+                    final int targetSize = bufferInfo.size;
+                    final int bufferCapacity = data.capacity();
+
+                    // 验证偏移量和大小有效性
+                    if (targetOffset < 0 || targetSize <= 0 || (targetOffset + targetSize) > bufferCapacity) {
+                        Timber.tag(TAG).e("Invalid buffer range: offset=%d size=%d capacity=%d",
+                                targetOffset, targetSize, bufferCapacity);
+                        return;
+                    }
+
+                    BytePointer srcPtr = new BytePointer(data);
+                    if (srcPtr == null) {
+                        Timber.tag(TAG).w("Failed to create source pointer");
+                        return;
+                    }
+
+                    // 使用synchronized保证线程安全
+                    synchronized (data) {
+                        int oldPosition = data.position();
+                        int oldLimit = data.limit();
+                        try {
+                            data.position(targetOffset);
+                            data.limit(targetOffset + targetSize);
+                            srcPtr.position(targetOffset).limit(targetOffset + targetSize);
+
+                            // 重要：检查指针有效性
+                            if (dstPtr == null || srcPtr == null ||
+                                    dstPtr.address() == 0 || srcPtr.address() == 0)
+                            {
+                                Timber.tag(TAG).w("Invalid pointer detected");
+                                return;
+                            }
+
+                            dstPtr.put(srcPtr);
+                            dstPtr.get();
+                            Timber.tag(TAG).d("Data copied successfully");
+                        } finally {
+                            data.position(oldPosition);
+                            data.limit(oldLimit);
+                        }
+                    }
+                } catch (Exception e) {
+                    Timber.tag(TAG).e(e, "Unexpected error during buffer copy");
                 }
 
                 // 时间基计算(使用微秒时间基)
@@ -454,22 +495,23 @@ public class FFmpegPusher {
                 pkt.stream_index(videoStream.index());
                 int flags = (bufferInfo.flags & MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0 ? AV_PKT_FLAG_KEY : 0;
                 pkt.flags(flags);
-                Timber.tag(TAG).d("4");
                 ret = av_interleaved_write_frame(outputContext, pkt);
-
+                Timber.tag(TAG).d("4");
                 // 记录发送时间戳（纳秒）
                 PushStatistics.reportTimestamp(PushStatistics.TimeStampStyle.Pushed, System.nanoTime() - encodedTime);
                 if (ret < 0) {
                     isSuccess = false;
                     Timber.tag(TAG).e("帧写入失败: %d", ret);
                 }
+                Thread.sleep(1);
             } catch (Exception e) {
                 throw new RuntimeException(e);
             }finally {
                 statistics.setPushStatistics(isSuccess, bufferInfo.size);
                 if (pkt != null) {
-                    av_packet_unref(pkt); // 释放数据包
-                    av_packet_free(pkt);  // 释放指针内存
+                    av_packet_unref(pkt);  // 先解除引用
+                    av_packet_free(pkt);   // 再释放内存
+                    pkt = null;            // 显式置空
                 }
             }
         }
@@ -496,6 +538,7 @@ public class FFmpegPusher {
 
     private void startFfmpeg() {
         synchronized (initStopLock) {
+            Timber.d("s1");
             AVFormatContext outputContext = null;
             AVDictionary options = null;
             try {
@@ -512,7 +555,7 @@ public class FFmpegPusher {
                 if (outputFormat == null) {
                     throw new RuntimeException("FFmpeg未编译RTSP支持");
                 }
-
+                Timber.d("s2");
                 PointerPointer<AVFormatContext> ctxPtr = new PointerPointer<>(1);
 
                 int ret = avformat_alloc_output_context2(
@@ -526,7 +569,7 @@ public class FFmpegPusher {
                     throw new RuntimeException("上下文分配失败: " + av_err2str(ret));
                 }
                 outputContext = new AVFormatContext(ctxPtr.get());
-
+                Timber.d("s3");
                 // 检查pb是否已初始化
                 if (outputContext.pb() == null || outputContext.pb().isNull()) {
                     // 需要手动初始化AVIOContext
@@ -567,7 +610,7 @@ public class FFmpegPusher {
                 av_dict_set(options, "tune", "zerolatency", 0);
                 av_dict_set(options, "timeout", "3000000", 0); // 3秒超时\
                 av_dict_set(options, "f", "rtsp", 0);
-
+                Timber.d("s4");
                 // 6. 写入头部
                 ret = avformat_write_header(outputContext, options);
                 if (ret < 0) {
@@ -580,7 +623,7 @@ public class FFmpegPusher {
                 statistics = new PushStatistics();
                 statistics.startPushStatistics(4, 6,
                         url, 0.4);
-
+                Timber.d("s5");
             } catch (Exception e) {
                 // 错误处理
                 if (outputContext != null) {

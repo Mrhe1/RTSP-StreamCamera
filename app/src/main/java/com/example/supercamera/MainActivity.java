@@ -119,7 +119,7 @@ public class MainActivity extends AppCompatActivity {
 
     public class onStartedCheck{
         private AtomicIntegerArray isStarted = new AtomicIntegerArray(3);
-        private static final int TIMEOUT_MILLISECONDS = 3500;
+        private static final int TIMEOUT_MILLISECONDS = 15000;
         private ScheduledExecutorService timeoutScheduler;
         public enum StartPart {
             CAMERA(0),
@@ -428,6 +428,7 @@ public class MainActivity extends AppCompatActivity {
                 // 3. 停止录制
                 if (videoRecorder != null) {
                     videoRecorder.stopRecording();
+                    videoRecorder = null;
                 }
                 //销毁开始回调
                 if(checker != null)

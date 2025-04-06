@@ -45,7 +45,6 @@ public class VideoPusher {
     private Surface inputSurface; //Surface成员
     private long lastPresentationTimeUs = 0;
     private final ExecutorService encoderExecutor = Executors.newSingleThreadExecutor();
-    private final ExecutorService initExecutor = Executors.newSingleThreadExecutor();
     private final PublishSubject<PushReport> reportSubject = PublishSubject.create();
     private AVCodecParameters params = avcodec_parameters_alloc();
     private final CompositeDisposable compositeDisposable = new CompositeDisposable();
@@ -227,7 +226,6 @@ public class VideoPusher {
                     synchronized (dimensionLock) {
                         if (currentState.get() != PushState.PUSHING &&
                         currentState.get() != PushState.STARTING) return;
-
                         // 获取实际的 ByteBuffer
                         ByteBuffer outputBuffer = mc.getOutputBuffer(outputBufferId);
                         if (outputBuffer == null) {
@@ -244,8 +242,7 @@ public class VideoPusher {
                             outputBuffer.get(configData);
                                 // 初始化推流器（确保只执行一次）
                                 if (currentState.get() == PushState.STARTING) {
-                                    setState(PushState.PUSHSTARTING);
-                                    initExecutor.submit(() -> {
+                                    boolean ok=setState(PushState.PUSHSTARTING);
                                         try {
                                             AVCodecParameters prt = getEncoderParameters();
                                             pusher.initPusher(configData, prt);
@@ -266,7 +263,6 @@ public class VideoPusher {
                                             }, 100, TimeUnit.MILLISECONDS);
                                         }
                                         if(currentState.get() == PushState.STARTING) setState(PushState.PUSHING);
-                                    });
                                 }
 
                             mc.releaseOutputBuffer(outputBufferId, false);
@@ -283,7 +279,6 @@ public class VideoPusher {
                                 bufferInfo.presentationTimeUs = lastPresentationTimeUs + 1000000 / fps;
                             }
                             lastPresentationTimeUs = bufferInfo.presentationTimeUs;
-
                             pusher.pushFrame(outputBuffer, bufferInfo, encodedTime);
                         } catch (Exception e) {
                             Timber.tag(TAGcodec).e("写入数据失败: %s", e.getMessage());
