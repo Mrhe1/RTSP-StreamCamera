@@ -55,6 +55,7 @@ public class VideoPusher {
         ERROR,
         RECONNECTING,
         STARTING,
+        PUSHSTARTING,
         STOPPING
     }
 
@@ -108,7 +109,9 @@ public class VideoPusher {
         PushState current = currentState.get();
         return switch (current) {
             case READY -> newState == PushState.STARTING;
-            case STARTING -> newState == PushState.PUSHING || newState == PushState.ERROR ||
+            case STARTING -> newState == PushState.ERROR || newState == PushState.STOPPING
+            || newState == PushState.PUSHSTARTING;
+            case PUSHSTARTING -> newState == PushState.PUSHING || newState == PushState.ERROR ||
                     newState == PushState.STOPPING;
             case PUSHING -> newState == PushState.ERROR || newState == PushState.STOPPING
                     || newState == PushState.RECONNECTING;
@@ -239,32 +242,33 @@ public class VideoPusher {
                             byte[] configData = new byte[bufferInfo.size];
                             outputBuffer.position(bufferInfo.offset);
                             outputBuffer.get(configData);
-                            try {
-                                AVCodecParameters prt = getEncoderParameters();
                                 // 初始化推流器（确保只执行一次）
                                 if (currentState.get() == PushState.STARTING) {
-                                    initExecutor.submit(() ->
-                                        pusher.initPusher(configData, prt));
+                                    setState(PushState.PUSHSTARTING);
+                                    initExecutor.submit(() -> {
+                                        try {
+                                            AVCodecParameters prt = getEncoderParameters();
+                                            pusher.initPusher(configData, prt);
+                                            setState(PushState.PUSHING);
+                                            reportSubject.onNext(new PushReport(
+                                                    EventType.PUSH_STARTED,
+                                                    0, "推流开始成功", 0,
+                                                    0, 0, 0));
+                                        } catch (Exception e) {
+                                            String msg = String.format("ffmpeg初始化失败:%s", e.getMessage());
+                                            Timber.tag(TAG).e(msg);
+                                            setState(PushState.ERROR);
+
+                                            // 在单独线程中出处理错误
+                                            ScheduledFuture<?> future = errorHandler.schedule(() -> {
+                                                stopPush();
+                                                reportError(0, msg);
+                                            }, 100, TimeUnit.MILLISECONDS);
+                                        }
+                                        if(currentState.get() == PushState.STARTING) setState(PushState.PUSHING);
+                                    });
                                 }
 
-                                setState(PushState.PUSHING);
-                                reportSubject.onNext(new PushReport(
-                                        EventType.PUSH_STARTED,
-                                        0,"推流开始成功", 0,
-                                        0,0 ,0));
-                            } catch (Exception e) {
-                                String msg = String.format("ffmpeg初始化失败:%s",e.getMessage());
-                                Timber.tag(TAG).e(msg);
-                                setState(PushState.ERROR);
-
-                                // 在单独线程中出处理错误
-                                ScheduledFuture<?> future = errorHandler.schedule(() -> {
-                                    stopPush();
-                                    reportError(0,msg);
-                                }, 100, TimeUnit.MILLISECONDS);
-                            }
-
-                            if(currentState.get() == PushState.STARTING) setState(PushState.PUSHING);
                             mc.releaseOutputBuffer(outputBufferId, false);
                             return;
                         }

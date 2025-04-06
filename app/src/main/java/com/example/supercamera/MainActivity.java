@@ -119,7 +119,7 @@ public class MainActivity extends AppCompatActivity {
 
     public class onStartedCheck{
         private AtomicIntegerArray isStarted = new AtomicIntegerArray(3);
-        private static final int TIMEOUT_MILLISECONDS = 3000;
+        private static final int TIMEOUT_MILLISECONDS = 3500;
         private ScheduledExecutorService timeoutScheduler;
         public enum StartPart {
             CAMERA(0),
@@ -910,6 +910,12 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
     // 停止摄像头
     private void stopCamera() {
         try {
+            // 释放预览Surface
+            if (previewSurface != null) {
+                previewSurface.release();
+                previewSurface = null;
+            }
+
             runOnUiThread(() -> {
                 if (textureView != null) {
                     textureView.setVisibility(View.GONE);

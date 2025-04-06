@@ -565,7 +565,7 @@ public class FFmpegPusher {
                 av_dict_set(options, "rtsp_transport", "tcp", 0);
                 av_dict_set(options, "max_delay", "200000", 0);
                 av_dict_set(options, "tune", "zerolatency", 0);
-                av_dict_set(options, "timeout", "5000000", 0); // 5秒超时\
+                av_dict_set(options, "timeout", "3000000", 0); // 3秒超时\
                 av_dict_set(options, "f", "rtsp", 0);
 
                 // 6. 写入头部

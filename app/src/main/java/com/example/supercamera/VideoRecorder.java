@@ -119,7 +119,12 @@ public class VideoRecorder {
                                 if (mediaMuxer == null || !muxerStarted) return;
 
                                 // 获取实际的 ByteBuffer
-                                ByteBuffer outputBuffer = mc.getOutputBuffer(outputBufferId);
+                                ByteBuffer outputBuffer;
+                                try {
+                                    outputBuffer = mc.getOutputBuffer(outputBufferId);
+                                } catch (Exception e) {
+                                    return;
+                                }
                                 if (outputBuffer == null) {
                                     Timber.tag(TAG).w("获取输出缓冲区失败");
                                     mc.releaseOutputBuffer(outputBufferId, false);
