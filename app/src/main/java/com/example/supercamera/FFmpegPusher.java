@@ -43,11 +43,15 @@ import io.reactivex.rxjava3.schedulers.Schedulers;
 import io.reactivex.rxjava3.subjects.PublishSubject;
 import timber.log.Timber;
 
+import java.lang.ref.Cleaner;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Queue;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -72,14 +76,16 @@ public class FFmpegPusher {
     private final String url;
     private byte[] header;
     private AVCodecParameters srcParams;
+    private static int startCount = 0;
     private final Object initStopLock = new Object();
     private final Object reconnectLock = new Object();
     private Disposable reconnectDisposable;
     private final CompositeDisposable compositeDisposable = new CompositeDisposable();
     private PushStatistics statistics;
     private final PublishSubject<VideoPusher.PushReport> reportSubject = PublishSubject.create();
-
-    public class PushStatistics{
+    private AVPacket pkt;
+    private int pktSize;
+    public class PushStatistics {
         private List<FrameInfo> frameList = Collections.synchronizedList(new ArrayList<>());
         //private AtomicInteger rtt = new AtomicInteger(0);
         Queue<Integer> rtt = new CircularFifoQueue<Integer>(3);
@@ -98,6 +104,7 @@ public class FFmpegPusher {
         public final class FrameInfo {
             private final boolean isPushFrameSuccess;
             private final int frameSize;
+
             //private int rtt;
             public FrameInfo(boolean isPushFrameSuccess, int frameSize) {
                 this.isPushFrameSuccess = isPushFrameSuccess;
@@ -114,7 +121,7 @@ public class FFmpegPusher {
             }
 
             //public int getRtt() {
-                //return rtt;
+            //return rtt;
             //}
         }
 
@@ -139,13 +146,13 @@ public class FFmpegPusher {
                 Ping.onAddress(host).setTimeOutMillis(1000).doPing(new Ping.PingListener() {
                     @Override
                     public void onResult(com.stealthcopter.networktools.ping.PingResult pingResult) {
-                        if(pingResult.isReachable){
-                            int currentRTT = (int)Math.round(pingResult.timeTaken);
+                        if (pingResult.isReachable) {
+                            int currentRTT = (int) Math.round(pingResult.timeTaken);
                             synchronized (rtt) {
                                 rtt.add(currentRTT);
                             }
                             Timber.tag(TAG).i("ping成功，rtt：%d", currentRTT);
-                        }else{
+                        } else {
                             synchronized (rtt) {
                                 rtt.add(-1);
                             }
@@ -177,7 +184,7 @@ public class FFmpegPusher {
 
         public void startPushStatistics(int intervalSeconds,
                                         int pingIntervalSeconds, String url,
-                                        double pushFailureRateSet){
+                                        double pushFailureRateSet) {
             this.intervalSeconds = intervalSeconds;
             pushFailureRate.set(pushFailureRateSet);
             // 获取host地址
@@ -188,7 +195,7 @@ public class FFmpegPusher {
                 host = matcher.group(1);
             } else {
                 Timber.tag(TAG).e("rtsp地址无法解析");
-                throw new RuntimeException ("rtsp地址无法解析");
+                throw new RuntimeException("rtsp地址无法解析");
             }
 
             executor = Executors.newSingleThreadScheduledExecutor();
@@ -198,8 +205,7 @@ public class FFmpegPusher {
             pingHelper.startPeriodicPing(host, pingIntervalSeconds);
         }
 
-        public void stopPushStatistics()
-        {
+        public void stopPushStatistics() {
             try {
                 //停止ping
                 pingHelper.stopPeriodicPing();
@@ -213,7 +219,7 @@ public class FFmpegPusher {
             }
         }
 
-        public void setPushStatistics(boolean isSuccess, int size){
+        public void setPushStatistics(boolean isSuccess, int size) {
             frameList.add(new FrameInfo(isSuccess, size));
         }
 
@@ -284,12 +290,12 @@ public class FFmpegPusher {
                         }
 
                         // 用rtt和帧大小估算I/O延迟,按上行带宽15mbps算,加5ms的tcp额外开销
-                        avgLatency3 = avgRTT +  currentBitrate /1024/fps/15 + 5;
+                        avgLatency3 = avgRTT + currentBitrate / 1024 / fps / 15 + 5;
                         totalLatency = ((int) ((avgLatency1 + avgLatency2) / 1_000_000L)) + avgLatency3;
 
                         Timber.tag(TAG).d("平均延迟计算完成: L1=%dms, L2=%dms ,L3=%dms",
-                                (int)(avgLatency1 / 1_000_000L),
-                                (int)(avgLatency2 / 1_000_000L), avgLatency3);
+                                (int) (avgLatency1 / 1_000_000L),
+                                (int) (avgLatency2 / 1_000_000L), avgLatency3);
                     }
                 } catch (Exception e) {
                     Timber.tag(TAG).e(e, "延迟计算异常");
@@ -321,13 +327,13 @@ public class FFmpegPusher {
         }
 
         // 判断是否需要重连（可指定pushFrame出现Error的比例超过pushFailureRate就重连）
-        public boolean ifNeedReconnect(){
+        public boolean ifNeedReconnect() {
             return ifNeedReconnect.get();
         }
 
         public static void reportTimestamp(TimeStampStyle timeStampStyle, long timestamp) {
             synchronized (timestampLock) {
-                if(VideoPusher.currentState.get() != VideoPusher.PushState.PUSHING) return;
+                if (VideoPusher.currentState.get() != VideoPusher.PushState.PUSHING) return;
                 switch (timeStampStyle) {
                     case Captured -> {
                         capturedTimestampList.add(timestamp);
@@ -335,7 +341,7 @@ public class FFmpegPusher {
                     case Encoded -> {
                         // 遍历时同步列表
                         List<Long> tempList = new ArrayList<>(capturedTimestampList);
-                        for (int i = tempList.size() - 1; i >= 0; i--){
+                        for (int i = tempList.size() - 1; i >= 0; i--) {
                             if (tempList.get(i) < timestamp &&
                                     timestamp - tempList.get(i) <= 33_000_000L) {
                                 latency1List.add(timestamp - tempList.get(i));
@@ -354,37 +360,29 @@ public class FFmpegPusher {
 
     // 获取错误码对应内容
     private static String av_err2str(int errcode) {
-        BytePointer buffer = new BytePointer(128);
-        try {
+        try (BytePointer buffer = new BytePointer(128)) {
             int ret = av_strerror(errcode, buffer, buffer.capacity());
-            if (ret < 0) {
-                return "Unknown error (" + errcode + ")";
-            }
-            return buffer.getString();
-        } finally {
-            buffer.deallocate(); // 确保释放
+            return (ret < 0) ? "Unknown error" : buffer.getString();
         }
     }
 
-
     public FFmpegPusher(String url, int width, int height, int fps,
-                           int Bitrate) {
-            this.url = url;
-            this.width = width;
-            this.height = height;
-            this.fps = fps;
-            this.Bitrate = Bitrate;
+                        int Bitrate) {
+        this.url = url;
+        this.width = width;
+        this.height = height;
+        this.fps = fps;
+        this.Bitrate = Bitrate;
     }
 
-    public void initPusher(byte[] header, AVCodecParameters srcParams)
-    {
+    public void initPusher(byte[] header, AVCodecParameters srcParams) {
         this.header = header;
         this.srcParams = srcParams;
 
-        try{
+        try {
             startFfmpeg();
         } catch (Exception e) {
-            Timber.tag(TAG).e(e.getMessage(),"初始化ffmpeg失败");
+            Timber.tag(TAG).e(e.getMessage(), "初始化ffmpeg失败");
             throw new RuntimeException(e);
         }
     }
@@ -396,7 +394,7 @@ public class FFmpegPusher {
                 return;
             }
 
-            Timber.tag(TAG).d("1");
+            //Timber.tag(TAG).d("1");
             // 关键指针状态检查
             if (outputContext == null || outputContext.isNull() ||
                     videoStream == null || videoStream.isNull()) {
@@ -410,7 +408,7 @@ public class FFmpegPusher {
             }
 
             boolean isSuccess = true;
-            AVPacket pkt = av_packet_alloc();
+            AVPacket pkt = acquirePacket();
             try {
                 // 验证bufferInfo参数有效性
                 if (bufferInfo.offset < 0 || bufferInfo.size <= 0
@@ -426,13 +424,14 @@ public class FFmpegPusher {
                     return;
                 }
 
-                Timber.tag(TAG).d("2");
+                //Timber.tag(TAG).d("2");
                 if (pkt == null || data == null || bufferInfo == null) {
                     Timber.tag(TAG).w("Invalid null object detected");
                     return;
                 }
 
                 try {
+                    //BytePointer dstPtr = reusableBuffer.get().capacity(bufferInfo.size);
                     BytePointer dstPtr = pkt.data();
                     if (dstPtr == null) {
                         Timber.tag(TAG).w("Packet data is null");
@@ -468,15 +467,14 @@ public class FFmpegPusher {
 
                             // 重要：检查指针有效性
                             if (dstPtr == null || srcPtr == null ||
-                                    dstPtr.address() == 0 || srcPtr.address() == 0)
-                            {
+                                    dstPtr.address() == 0 || srcPtr.address() == 0) {
                                 Timber.tag(TAG).w("Invalid pointer detected");
                                 return;
                             }
 
                             dstPtr.put(srcPtr);
                             dstPtr.get();
-                            Timber.tag(TAG).d("Data copied successfully");
+                            //Timber.tag(TAG).d("Data copied successfully");
                         } finally {
                             data.position(oldPosition);
                             data.limit(oldLimit);
@@ -496,7 +494,7 @@ public class FFmpegPusher {
                 int flags = (bufferInfo.flags & MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0 ? AV_PKT_FLAG_KEY : 0;
                 pkt.flags(flags);
                 ret = av_interleaved_write_frame(outputContext, pkt);
-                Timber.tag(TAG).d("4");
+                //Timber.tag(TAG).d("4");
                 // 记录发送时间戳（纳秒）
                 PushStatistics.reportTimestamp(PushStatistics.TimeStampStyle.Pushed, System.nanoTime() - encodedTime);
                 if (ret < 0) {
@@ -506,12 +504,10 @@ public class FFmpegPusher {
                 Thread.sleep(1);
             } catch (Exception e) {
                 throw new RuntimeException(e);
-            }finally {
+            } finally {
                 statistics.setPushStatistics(isSuccess, bufferInfo.size);
-                if (pkt != null) {
-                    av_packet_unref(pkt);  // 先解除引用
-                    av_packet_free(pkt);   // 再释放内存
-                    pkt = null;            // 显式置空
+                if (pkt != null && !pkt.isNull()) {
+                    releasePacket(pkt);
                 }
             }
         }
@@ -526,6 +522,7 @@ public class FFmpegPusher {
                 }
                 //销毁重连
                 disposeReconnect();
+                Thread.sleep(50);
                 stopFfmpeg();
             } catch (Exception e) {
 
@@ -534,11 +531,11 @@ public class FFmpegPusher {
     }
 
     /////////////////////////////////////////////////////////////////////////////////
-                                //%!以下方法为内部方法！%//
+    //%!以下方法为内部方法！%//
 
     private void startFfmpeg() {
         synchronized (initStopLock) {
-            Timber.d("s1");
+            //Timber.d("s1");
             AVFormatContext outputContext = null;
             AVDictionary options = null;
             try {
@@ -547,15 +544,18 @@ public class FFmpegPusher {
                     throw new IllegalArgumentException("URL必须以rtsp://开头");
                 }
 
-                // 1. 初始化网络（关键）
-                avformat_network_init();
+                // 1. 初始化网络（只进行一次）
+                if (startCount == 0) {
+                    avformat_network_init();
+                }
+                startCount++;
 
                 // 2. 使用alloc_output_context2自动创建上下文
                 AVOutputFormat outputFormat = av_guess_format("rtsp", null, null);
                 if (outputFormat == null) {
                     throw new RuntimeException("FFmpeg未编译RTSP支持");
                 }
-                Timber.d("s2");
+                //Timber.d("s2");
                 PointerPointer<AVFormatContext> ctxPtr = new PointerPointer<>(1);
 
                 int ret = avformat_alloc_output_context2(
@@ -569,7 +569,7 @@ public class FFmpegPusher {
                     throw new RuntimeException("上下文分配失败: " + av_err2str(ret));
                 }
                 outputContext = new AVFormatContext(ctxPtr.get());
-                Timber.d("s3");
+                //Timber.d("s3");
                 // 检查pb是否已初始化
                 if (outputContext.pb() == null || outputContext.pb().isNull()) {
                     // 需要手动初始化AVIOContext
@@ -596,7 +596,9 @@ public class FFmpegPusher {
 
                 // 设置关键参数
                 dstParams.codec_tag(0);
-                dstParams.extradata(new BytePointer(header));
+                BytePointer extradata = new BytePointer(av_malloc(header.length));
+                extradata.put(header);
+                dstParams.extradata(extradata);
                 dstParams.extradata_size(header.length);
 
                 // 时间基配置
@@ -610,7 +612,7 @@ public class FFmpegPusher {
                 av_dict_set(options, "tune", "zerolatency", 0);
                 av_dict_set(options, "timeout", "3000000", 0); // 3秒超时\
                 av_dict_set(options, "f", "rtsp", 0);
-                Timber.d("s4");
+                //Timber.d("s4");
                 // 6. 写入头部
                 ret = avformat_write_header(outputContext, options);
                 if (ret < 0) {
@@ -623,7 +625,7 @@ public class FFmpegPusher {
                 statistics = new PushStatistics();
                 statistics.startPushStatistics(4, 6,
                         url, 0.4);
-                Timber.d("s5");
+                //Timber.d("s5");
             } catch (Exception e) {
                 // 错误处理
                 if (outputContext != null) {
@@ -657,8 +659,9 @@ public class FFmpegPusher {
                         av_write_trailer(outputContext); // 仅在成功初始化后调用
                         avio_closep(outputContext.pb());
                     }
-                    //avformat_close_input(outputContext);
+                    //avformat_close_input(new PointerPointer<>(outputContext));
                     avformat_free_context(outputContext);
+                    //avio_closep(outputContext.pb());
                 }
             } catch (Exception e) {
                 Timber.e(e, "释放FFmpeg资源异常");
@@ -670,26 +673,29 @@ public class FFmpegPusher {
     }
 
 
-    private void restartPusher(){
-        if(VideoPusher.currentState.get() != VideoPusher.PushState.RECONNECTING) {
+    private void restartPusher() {
+        if (VideoPusher.currentState.get() != VideoPusher.PushState.RECONNECTING) {
             throw new RuntimeException("状态不对，无法重连");
         }
         outputContext = null;
         videoStream = null;
         // 先停止
         stopFfmpeg();
-        try { Thread.sleep(50); } catch (InterruptedException ignored) {}
+        try {
+            Thread.sleep(50);
+        } catch (InterruptedException ignored) {
+        }
 
         //再开始
-        try{
+        try {
             startFfmpeg();
-        }catch(Exception e){
-            Timber.tag(TAG).e(e.getMessage(),"ffmpeg重新启动失败");
+        } catch (Exception e) {
+            Timber.tag(TAG).e(e.getMessage(), "ffmpeg重新启动失败");
             throw new RuntimeException("ffmpeg重新启动失败" + e.getMessage());
         }
     }
 
-    private void reconnect(int MAX_RECONNECT_ATTEMPTS, int periodSeconds){
+    private void reconnect(int MAX_RECONNECT_ATTEMPTS, int periodSeconds) {
         synchronized (reconnectLock) {
             if (!VideoPusher.setState(VideoPusher.PushState.RECONNECTING)) {
                 Timber.tag(TAG).w("已有正在进行的重连任务");
@@ -707,7 +713,10 @@ public class FFmpegPusher {
             stopFfmpeg();
 
             // 延迟确保资源释放
-            try { Thread.sleep(100); } catch (InterruptedException ignored) {}
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException ignored) {
+            }
 
             reconnectDisposable = Observable.interval(periodSeconds, TimeUnit.SECONDS)
                     .take(MAX_RECONNECT_ATTEMPTS) // 限制次数
@@ -715,14 +724,14 @@ public class FFmpegPusher {
                     .subscribe(
                             tick -> {
                                 if (tick >= MAX_RECONNECT_ATTEMPTS - 1) {
-                                    Timber.tag(TAG).e( "达到最大重试次数");
+                                    Timber.tag(TAG).e("达到最大重试次数");
                                     VideoPusher.setState(VideoPusher.PushState.ERROR);
                                     disposeReconnect();
                                     stopPush();
                                     reportError(0, "达到最大重试次数");
                                     throw new RuntimeException("达到最大重试次数");
                                 }
-                                if(VideoPusher.currentState.get() != VideoPusher.PushState.RECONNECTING){
+                                if (VideoPusher.currentState.get() != VideoPusher.PushState.RECONNECTING) {
                                     disposeReconnect();
                                     throw new RuntimeException("状态不对，重连已销毁");
                                 }
@@ -746,7 +755,7 @@ public class FFmpegPusher {
                                 VideoPusher.currentState.set(VideoPusher.PushState.ERROR);
                                 disposeReconnect();
                                 stopPush();
-                                reportError(0,"重连流发生致命错误");
+                                reportError(0, "重连流发生致命错误");
                                 throw new RuntimeException("重连流发生致命错误");
                             }
                     );
@@ -760,26 +769,51 @@ public class FFmpegPusher {
                 if (!reconnectDisposable.isDisposed()) {
                     reconnectDisposable.dispose();
                 }
-                reconnectDisposable = null; // 状态重置
+                compositeDisposable.delete(reconnectDisposable); // 从组合订阅中移除
+                reconnectDisposable = null;
             }
         }
     }
 
-    private void reportError(int code, String msg)
-    {
+    private void reportError(int code, String msg) {
         reportSubject.onNext(new VideoPusher.PushReport(
                 VideoPusher.EventType.ERROR, code,
-                msg,0,0, 0,0));
+                msg, 0, 0, 0, 0));
     }
 
-    private void reportReconnection(int code, String msg)
-    {
+    private void reportReconnection(int code, String msg) {
         reportSubject.onNext(new VideoPusher.PushReport(
                 VideoPusher.EventType.RECONNECTION, code,
-                msg,0,0, 0, 0));
+                msg, 0, 0, 0, 0));
     }
 
     public PublishSubject<VideoPusher.PushReport> getReportSubject() {
         return reportSubject;
     }
+
+    private AVPacket acquirePacket() {
+        return (pkt != null) ? pkt : av_packet_alloc();
+    }
+
+    private void releasePacket(AVPacket pkt) {
+        av_packet_unref(pkt);
+    }
+
+    // 重用BytePointer对象
+    private final ThreadLocal<BytePointer> reusableBuffer = new ThreadLocal<>() {
+        @Override
+        protected BytePointer initialValue() {
+            return new BytePointer(av_malloc(256 * 1024)); // 预分配256kb
+        }
+    };
+
+    @Override
+    protected void finalize() throws Throwable {
+        try {
+            stopPush(); // 显式释放而非依赖 GC
+        } finally {
+            super.finalize();
+        }
+    }
 }
+
