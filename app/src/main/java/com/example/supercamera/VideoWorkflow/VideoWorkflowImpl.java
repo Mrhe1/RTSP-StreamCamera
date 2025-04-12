@@ -8,7 +8,7 @@ import java.util.concurrent.Executors;
 public class VideoWorkflowImpl implements VideoWorkflow {
     private WorkflowConfig mConfig;
     private WorkflowListener mListener;
-    private volatile WorkflowState.PushStateEnum mState = WorkflowState.PushStateEnum.IDLE;
+    private volatile WorkflowState.WorkflowEnum mState = WorkflowState.WorkflowEnum.IDLE;
     private Handler mMainHandler = new Handler(Looper.getMainLooper());
 
     @Override

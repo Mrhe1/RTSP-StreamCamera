@@ -1,7 +1,7 @@
 pluginManagement {
     repositories {
-        mavenLocal()
-        maven { url "file:///C:/Users/Administrator/.m2/repository" }
+        //mavenLocal()
+        //maven { url "file:///C:/Users/Administrator/.m2/repository" }
         //maven {url "file:\\\\wsl.localhost\\Ubuntu-20.04\\home\\hss\\.m2\\repository_root_backup"}
         maven { url=uri ("https://jitpack.io") }
         maven { url=uri ("https://maven.aliyun.com/repository/releases") }
@@ -10,7 +10,7 @@ pluginManagement {
         maven { url=uri ("https://maven.aliyun.com/repository/gradle-plugin") }
         maven { url=uri ("https://maven.aliyun.com/repository/public") }
         maven { url "https://maven.aliyun.com/nexus/content/repositories/releases" }
-        maven { url "file:///C:/Users/Administrator/.m2/repository" }
+        //maven { url "file:///C:/Users/Administrator/.m2/repository" }
         google()
         mavenCentral()
         gradlePluginPortal()
@@ -21,8 +21,8 @@ pluginManagement {
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
-        mavenLocal()
-        maven { url "file:///C:/Users/Administrator/.m2/repository" }
+        //mavenLocal()
+        //maven { url "file:///C:/Users/Administrator/.m2/repository" }
         //maven {url "file:\\\\wsl.localhost\\Ubuntu-20.04\\home\\hss\\.m2\\repository_root_backup"}
         maven { url=uri ("https://jitpack.io") }
         maven { url=uri ("https://maven.aliyun.com/repository/releases") }
@@ -30,7 +30,7 @@ dependencyResolutionManagement {
         maven { url=uri ("https://maven.aliyun.com/repository/central") }
         maven { url=uri ("https://maven.aliyun.com/repository/gradle-plugin") }
         maven { url=uri ("https://maven.aliyun.com/repository/public") }
-        maven { url "file:///C:/Users/Administrator/.m2/repository" }
+        //maven { url "file:///C:/Users/Administrator/.m2/repository" }
         mavenLocal()
         google()
         mavenCentral()

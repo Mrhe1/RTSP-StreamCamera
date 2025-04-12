@@ -4,11 +4,12 @@ import android.os.Handler;
 import android.os.Looper;
 
 import java.util.concurrent.Executors;
+import com.example.supercamera.VideoRecorder.RecorderState.RecorderStateEnum;
 
 public class VideoRecorderImpl implements VideoRecorder {
     private RecorderConfig mConfig;
     private RecorderListener mListener;
-    private volatile RecorderState.RecorderStateEnum mState = RecorderState.RecorderStateEnum.IDLE;
+    private volatile RecorderState.RecorderStateEnum state = RecorderState.RecorderStateEnum.IDLE;
     private Handler mMainHandler = new Handler(Looper.getMainLooper());
 
     @Override
@@ -31,7 +32,7 @@ public class VideoRecorderImpl implements VideoRecorder {
 
 
     @Override
-    public void setStreamListener(RecorderListener listener) {
+    public void setRecorderListener(RecorderListener listener) {
 
     }
 

@@ -18,10 +18,10 @@
 
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
-#-renamesourcefileattribute SourceFile
+#-renamesourcefileattribute SourceFi
 -keep class org.webrtc.** { *; }
--keep class com.alivc.** { *; }
--keep class com.aliyun.** { *; }
+#-keep class com.alivc.** { *; }
+#-keep class com.aliyun.** { *; }
 -keep class com.cicada.** { *; }
 -keep class com.example.supercamera.MyApplication { *; }
 -keep class com.example.supercamera.MainActivity { *; }
@@ -32,3 +32,4 @@
 -keepclassmembers class * {
     public void yourMethod();
 }
+-keep class com.example.supercamera.StreamPusher.PushStats.PushStatistics$FrameInfo { *; }

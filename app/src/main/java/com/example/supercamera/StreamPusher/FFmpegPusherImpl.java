@@ -2,15 +2,12 @@ package com.example.supercamera.StreamPusher;
 
 import android.os.Handler;
 import android.os.Looper;
-
+import com.example.supercamera.StreamPusher.PushConfig;
 import com.example.supercamera.StreamPusher.PushStats.PushStatsListener;
-import com.example.supercamera.VideoStreamer.StreamConfig;
-import com.example.supercamera.VideoWorkflow.WorkflowConfig;
-
 import java.util.concurrent.Executors;
 
 public class FFmpegPusherImpl implements StreamPusher {
-    private StreamConfig mConfig;
+    private PushConfig mConfig;
     //private com.example.supercamera.VideoWorkflow.PushStatsListener mListener;
     private volatile PushState.PushStateEnum mState = PushState.PushStateEnum.IDLE;
     private Handler mMainHandler = new Handler(Looper.getMainLooper());
@@ -36,10 +33,6 @@ public class FFmpegPusherImpl implements StreamPusher {
 
     @Override
     public void setStreamListener(PushStatsListener listener) {
-
-    }
-
-    private void setState(PushState newState) {
 
     }
 

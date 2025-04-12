@@ -301,7 +301,7 @@ public class MainActivity extends AppCompatActivity {
         int record_height = 1440;
         int record_bitrate = 5000;//单位kbps
         int record_fps =30;
-        String push_Url = "rtsp://192.168.101.106:8554/live/stream";// rtsp://47.109.148.245:1521/live/stream
+        String push_Url = "rtsp://47.109.148.245:1521/live/stream";// rtsp://47.109.148.245:1521/live/stream
 
         if(currentState.get() != WorkflowState.READY)
         {

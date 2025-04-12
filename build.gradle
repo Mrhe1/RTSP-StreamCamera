@@ -16,7 +16,7 @@ plugins {
 }
 
 ext {
-    ffmpegVersion = '7.1.1-1.5.12-SNAPSHOT'
+    //ffmpegVersion = '7.1.1-1.5.12-SNAPSHOT'
 }
 
 allprojects {

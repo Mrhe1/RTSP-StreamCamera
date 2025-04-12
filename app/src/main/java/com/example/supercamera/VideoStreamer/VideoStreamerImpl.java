@@ -5,10 +5,12 @@ import android.os.Looper;
 
 import java.util.concurrent.Executors;
 
+import com.example.supercamera.VideoStreamer.StreamState;
+
 public class VideoStreamerImpl implements VideoStreamer {
     private StreamConfig mConfig;
     private StreamListener mListener;
-    private volatile StreamState.PushStateEnum mState = StreamState.PushStateEnum.IDLE;
+    private volatile StreamStateEnum mState = StreamStateEnum.IDLE;
     private Handler mMainHandler = new Handler(Looper.getMainLooper());
 
     @Override
@@ -32,10 +34,6 @@ public class VideoStreamerImpl implements VideoStreamer {
 
     @Override
     public void setStreamListener(StreamListener listener) {
-
-    }
-
-    private void setState(StreamState newState) {
 
     }
 
