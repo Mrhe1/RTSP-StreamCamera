@@ -5,7 +5,7 @@ import android.os.Looper;
 
 import java.util.concurrent.Executors;
 
-import com.example.supercamera.VideoStreamer.StreamState;
+import com.example.supercamera.VideoStreamer.StreamState.StreamStateEnum;
 
 public class VideoStreamerImpl implements VideoStreamer {
     private StreamConfig mConfig;

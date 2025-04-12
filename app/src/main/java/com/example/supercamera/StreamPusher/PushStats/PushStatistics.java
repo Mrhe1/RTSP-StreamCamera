@@ -15,6 +15,7 @@ import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Matcher;
@@ -175,6 +176,9 @@ public class PushStatistics {
 
         pingHelper = new PingHelper();
         pingHelper.startPeriodicPing(host, pingIntervalSeconds);
+
+        // 订阅reportQueue
+        setQueueReceiver();
     }
 
     // throw RuntimeException
@@ -202,9 +206,41 @@ public class PushStatistics {
         this.listener = listener;
     }
 
-    // 在每帧时调用
+    // 在每帧push时调用
     public void setPushStatistics(boolean isSuccess, int size) {
         frameList.add(FrameInfoPool.obtain(isSuccess, size));
+    }
+
+    // 在每帧push时调用
+    public void reportTimestamp(TimeStamp stamp) {
+        synchronized (timestampLock) {
+            //if (VideoPusher.currentState.get() != VideoPusher.PushState.PUSHING) return;
+            switch (stamp.style) {
+                case Captured -> {
+                    capturedTimestampQueue.add(stamp.timeStamp);
+                }
+                case Encoded -> {
+                    // 遍历时同步列表
+                    if (capturedTimestampQueue.isEmpty()) return;
+                    List<Long> tempList = new ArrayList<>(capturedTimestampQueue);
+                    for (int i = tempList.size() - 1; i >= 0; i--) {
+                        if (tempList.get(i) < stamp.timeStamp &&
+                                stamp.timeStamp - tempList.get(i) <= 33_000_000L) {
+                            latency1Queue.add(stamp.timeStamp - tempList.get(i));
+                            break;
+                        }
+                    }
+                }
+                case Pushed -> {
+                    latency2Queue.add(stamp.timeStamp);
+                }
+            }
+        }
+    }
+
+    // 判断是否需要重连（可指定pushFrame出现Error的比例超过pushFailureRate就重连）
+    public boolean ifNeedReconnect() {
+        return ifNeedReconnect.get();
     }
 
     private void reportPushStatistics() {
@@ -307,18 +343,16 @@ public class PushStatistics {
                 }
             }
 
-            //reportSubject.onNext(new VideoPusher.PushReport(
-                    //VideoPusher.EventType.Statistics, 0, "推流统计回调",
-                    //currentBitrate, currentRTT, curPushFailureRate.get(), totalLatency));
-
+            // 回调
+            int finalCurrentRTT = currentRTT;
+            int finalTotalLatency = totalLatency;
+            Executors.newSingleThreadExecutor().submit(() -> {
+                listener.onStatistics(new PushStatsInfo(currentBitrate, finalCurrentRTT,
+                        curPushFailureRate.get(), finalTotalLatency));
+            });
         } catch (Exception e) {
             Timber.tag(TAG).e(e, "统计任务异常");
         }
-    }
-
-    // 判断是否需要重连（可指定pushFrame出现Error的比例超过pushFailureRate就重连）
-    public boolean ifNeedReconnect() {
-        return ifNeedReconnect.get();
     }
 
     // 订阅reportQueue
@@ -332,33 +366,6 @@ public class PushStatistics {
                 .subscribe(report -> {
                     reportTimestamp((TimeStamp) report);
                 });
-
         compositeDisposable.add(disposable);
-    }
-
-    private static void reportTimestamp(TimeStamp stamp) {
-        synchronized (timestampLock) {
-            //if (VideoPusher.currentState.get() != VideoPusher.PushState.PUSHING) return;
-            switch (stamp.style) {
-                case Captured -> {
-                    capturedTimestampQueue.add(stamp.timeStamp);
-                }
-                case Encoded -> {
-                    // 遍历时同步列表
-                    if (capturedTimestampQueue.isEmpty()) return;
-                    List<Long> tempList = new ArrayList<>(capturedTimestampQueue);
-                    for (int i = tempList.size() - 1; i >= 0; i--) {
-                        if (tempList.get(i) < stamp.timeStamp &&
-                                stamp.timeStamp - tempList.get(i) <= 33_000_000L) {
-                            latency1Queue.add(stamp.timeStamp - tempList.get(i));
-                            break;
-                        }
-                    }
-                }
-                case Pushed -> {
-                    latency2Queue.add(stamp.timeStamp);
-                }
-            }
-        }
     }
 }
