@@ -11,5 +11,5 @@ public interface StreamPusher {
     // 停止推流（同步阻塞）
     void stop();
     // 注册回调监听器
-    void setStreamListener(PushStatsListener listener);
+    void setStreamListener(PushListener listener);
 }

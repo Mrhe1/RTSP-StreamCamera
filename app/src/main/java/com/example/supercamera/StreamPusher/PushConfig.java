@@ -1,6 +1,8 @@
 package com.example.supercamera.StreamPusher;
 
-import org.bytedeco.ffmpeg.global.*;
+import com.example.supercamera.StreamPusher.PushStats.TimeStamp;
+
+import io.reactivex.rxjava3.subjects.PublishSubject;
 
 public class PushConfig {
     public final String url;
@@ -10,6 +12,10 @@ public class PushConfig {
     public final int Bitrate;
     public final byte[] header;
     public final int codecID;
+    public final PublishSubject<TimeStamp>[] timeStampQueue;
+    public final int statsIntervalSeconds;  // stats回调间隔时间（秒）
+    public final int pingIntervalSeconds;    // ping间隔时间（秒）
+    public final double pushFailureRateSet;// 设置丢包率大于多少重连
 
     // 私有构造函数，只能通过Builder创建
     private PushConfig(Builder builder) {
@@ -20,6 +26,10 @@ public class PushConfig {
         this.Bitrate = builder.Bitrate;
         this.header = builder.header;
         this.codecID = builder.codecID;
+        this.timeStampQueue = builder.timeStampQueue;
+        this.statsIntervalSeconds = builder.statsIntervalSeconds;
+        this.pingIntervalSeconds = builder.pingIntervalSeconds;
+        this.pushFailureRateSet = builder.pushFailureRateSet;
     }
 
     // Builder内部类
@@ -31,6 +41,10 @@ public class PushConfig {
         private int Bitrate;
         private byte[] header;
         private int codecID;
+        private PublishSubject<TimeStamp>[] timeStampQueue;
+        private int statsIntervalSeconds;  // stats回调间隔时间（秒）
+        private int pingIntervalSeconds;    // ping间隔时间（秒）
+        private double pushFailureRateSet;    // 设置丢包率大于多少重连
 
         public Builder setUrl(String url) {
             this.url = url;
@@ -61,6 +75,28 @@ public class PushConfig {
         // org. bytedeco. ffmpeg. avcodec. AVCodecParameters  codec_id
         public Builder setCodecID(int codecID) {
             this.codecID = codecID;
+            return this;
+        }
+
+        // 指定报告TimeStamp的消息队列
+        public Builder setTimeStampQueue(PublishSubject<TimeStamp>[] timeStampQueue) {
+            this.timeStampQueue = timeStampQueue;
+            return this;
+        }
+
+        public Builder setStatsIntervalSeconds(int seconds) {
+            this.statsIntervalSeconds = seconds;
+            return this;
+        }
+
+        public Builder setPingIntervalSeconds(int seconds) {
+            this.pingIntervalSeconds = seconds;
+            return this;
+        }
+
+        // 设置丢包率大于多少重连
+        public Builder setPushFailureRate(double rate) {
+            this.pushFailureRateSet = rate;
             return this;
         }
 

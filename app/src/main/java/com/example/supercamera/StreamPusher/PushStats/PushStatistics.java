@@ -1,5 +1,6 @@
 package com.example.supercamera.StreamPusher.PushStats;
 
+import com.example.supercamera.StreamPusher.PushState;
 import com.example.supercamera.VideoPusher;
 import com.google.common.util.concurrent.AtomicDouble;
 import com.stealthcopter.networktools.Ping;
@@ -245,9 +246,9 @@ public class PushStatistics {
 
     private void reportPushStatistics() {
         try {
-            //if (VideoPusher.currentState.get() != VideoPusher.PushState.PUSHING) {
-                //return;
-            //}
+            if (PushState.getState() != PushState.PushStateEnum.PUSHING) {
+                return;
+            }
 
             // 计算错误帧和码率
             int ErrorFrameNum = 0;
