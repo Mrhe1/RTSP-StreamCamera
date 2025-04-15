@@ -2,6 +2,8 @@ package com.example.supercamera.StreamPusher;
 
 import com.example.supercamera.StreamPusher.PushStats.TimeStamp;
 
+import java.util.List;
+
 import io.reactivex.rxjava3.subjects.PublishSubject;
 
 public class PushConfig {
@@ -12,7 +14,7 @@ public class PushConfig {
     public final int Bitrate;
     public final byte[] header;
     public final int codecID;
-    public final PublishSubject<TimeStamp>[] timeStampQueue;
+    public final List<PublishSubject<TimeStamp>> timeStampQueue;
     public final int statsIntervalSeconds;  // stats回调间隔时间（秒）
     public final int pingIntervalSeconds;    // ping间隔时间（秒）
     public final double pushFailureRateSet;// 设置丢包率大于多少重连
@@ -41,7 +43,7 @@ public class PushConfig {
         private int Bitrate;
         private byte[] header;
         private int codecID;
-        private PublishSubject<TimeStamp>[] timeStampQueue;
+        private List<PublishSubject<TimeStamp>> timeStampQueue;
         private int statsIntervalSeconds;  // stats回调间隔时间（秒）
         private int pingIntervalSeconds;    // ping间隔时间（秒）
         private double pushFailureRateSet;    // 设置丢包率大于多少重连
@@ -79,7 +81,7 @@ public class PushConfig {
         }
 
         // 指定报告TimeStamp的消息队列
-        public Builder setTimeStampQueue(PublishSubject<TimeStamp>[] timeStampQueue) {
+        public Builder setTimeStampQueue(List<PublishSubject<TimeStamp>> timeStampQueue) {
             this.timeStampQueue = timeStampQueue;
             return this;
         }

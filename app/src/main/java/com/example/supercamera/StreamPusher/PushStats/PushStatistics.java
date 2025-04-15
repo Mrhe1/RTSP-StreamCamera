@@ -1,7 +1,6 @@
 package com.example.supercamera.StreamPusher.PushStats;
 
 import com.example.supercamera.StreamPusher.PushState;
-import com.example.supercamera.VideoPusher;
 import com.google.common.util.concurrent.AtomicDouble;
 import com.stealthcopter.networktools.Ping;
 import com.stealthcopter.networktools.ping.PingStats;
@@ -9,18 +8,17 @@ import com.stealthcopter.networktools.ping.PingStats;
 import org.apache.commons.collections4.queue.CircularFifoQueue;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 import io.reactivex.rxjava3.core.Observable;
 import io.reactivex.rxjava3.disposables.CompositeDisposable;
@@ -34,21 +32,20 @@ public class PushStatistics {
     private final int pingIntervalSeconds;
     private final String url;
     private final double pushFailureRateSet;
-    private final PublishSubject<TimeStamp> [] reportQueue;
+    List<PublishSubject<TimeStamp>> reportQueue = new ArrayList<>();
     private PushStatsListener listener;
     private final CompositeDisposable compositeDisposable = new CompositeDisposable();
     String TAG = "PushStatistics";
     private List<FrameInfo> frameList = Collections.synchronizedList(new ArrayList<>());
     Queue<Integer> rtt = new CircularFifoQueue<Integer>(3);
     private AtomicDouble curPushFailureRate = new AtomicDouble(0);
-    private AtomicBoolean ifNeedReconnect = new AtomicBoolean(false);
     private static final Object timestampLock = new Object();
     private static Queue<Long> latency1Queue = new CircularFifoQueue<>(250);
     private static Queue<Long> latency2Queue = new CircularFifoQueue<>(250);
     private static Queue<Long> capturedTimestampQueue = new CircularFifoQueue<>(250);
     private PingHelper pingHelper;
     private ScheduledExecutorService executor;
-
+    private ExecutorService reportExecutor = Executors.newSingleThreadExecutor();
     public static final class FrameInfo {
         private boolean isPushFrameSuccess;
         private int frameSize;
@@ -151,7 +148,7 @@ public class PushStatistics {
 
     public PushStatistics(int intervalSeconds, int pingIntervalSeconds,
                           String url, double pushFailureRateSet,
-                          PublishSubject<TimeStamp> [] reportQueue) {
+                          List<PublishSubject<TimeStamp>> reportQueue) {
         this.intervalSeconds = intervalSeconds;
         this.pingIntervalSeconds = pingIntervalSeconds;
         this.url = url;
@@ -193,9 +190,13 @@ public class PushStatistics {
             //停止ping
             pingHelper.stopPeriodicPing();
 
-            //停止report
+            //停止ping线程
             if (executor != null) {
                 executor.shutdown();
+            }
+
+            if (reportExecutor != null) {
+                reportExecutor.shutdown();
             }
         } catch (Exception e) {
             throw new RuntimeException(e);
@@ -213,7 +214,7 @@ public class PushStatistics {
     }
 
     // 在每帧push时调用
-    public void reportTimestamp(TimeStamp stamp) {
+    private void reportTimestamp(TimeStamp stamp) {
         synchronized (timestampLock) {
             //if (VideoPusher.currentState.get() != VideoPusher.PushState.PUSHING) return;
             switch (stamp.style) {
@@ -237,11 +238,6 @@ public class PushStatistics {
                 }
             }
         }
-    }
-
-    // 判断是否需要重连（可指定pushFrame出现Error的比例超过pushFailureRate就重连）
-    public boolean ifNeedReconnect() {
-        return ifNeedReconnect.get();
     }
 
     private void reportPushStatistics() {
@@ -271,7 +267,12 @@ public class PushStatistics {
             double failureRate = (double) ErrorFrameNum / frameListSize;
             curPushFailureRate.set(Math.round(failureRate * 100.0) / 100.0);
 
-            ifNeedReconnect.set(curPushFailureRate.get() > pushFailureRateSet);
+            // 重连回调
+            if (curPushFailureRate.get() > pushFailureRateSet) {
+                reportExecutor.submit(() -> {
+                    listener.onNeedReconnect();
+                });
+            }
 
             // 延迟计算
             int totalLatency = -1;
@@ -347,7 +348,7 @@ public class PushStatistics {
             // 回调
             int finalCurrentRTT = currentRTT;
             int finalTotalLatency = totalLatency;
-            Executors.newSingleThreadExecutor().submit(() -> {
+            reportExecutor.submit(() -> {
                 listener.onStatistics(new PushStatsInfo(currentBitrate, finalCurrentRTT,
                         curPushFailureRate.get(), finalTotalLatency));
             });
@@ -358,15 +359,12 @@ public class PushStatistics {
 
     // 订阅reportQueue
     private void setQueueReceiver() {
-        // 使用mergeArray合并数组元素
-        Disposable disposable = Observable.mergeArray(Arrays.stream(reportQueue)
-                        .map(subject -> subject
-                                .observeOn(Schedulers.io()) // 为每个subject单独设置线程
-                        )
-                        .toArray(Observable[]::new))
-                .subscribe(report -> {
-                    reportTimestamp((TimeStamp) report);
-                });
+        Disposable disposable = Observable.merge(
+                        reportQueue.stream()
+                                .map(subject -> subject.observeOn(Schedulers.io()))
+                                .collect(Collectors.toList())
+                )
+                .subscribe(report -> reportTimestamp((TimeStamp) report));
         compositeDisposable.add(disposable);
     }
 }
