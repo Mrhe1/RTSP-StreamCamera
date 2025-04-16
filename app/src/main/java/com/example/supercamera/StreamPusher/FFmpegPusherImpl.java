@@ -30,7 +30,6 @@ import static org.bytedeco.ffmpeg.global.avutil.av_strerror;
 
 import android.media.MediaCodec;
 
-import com.example.supercamera.FFmpegPusher;
 import com.example.supercamera.StreamPusher.PushStats.PushStatistics;
 import com.example.supercamera.StreamPusher.PushStats.PushStatsInfo;
 import com.example.supercamera.StreamPusher.PushStats.PushStatsListener;
@@ -52,9 +51,9 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 import io.reactivex.rxjava3.core.Observable;
+import io.reactivex.rxjava3.disposables.CompositeDisposable;
 import io.reactivex.rxjava3.disposables.Disposable;
 import io.reactivex.rxjava3.schedulers.Schedulers;
 import io.reactivex.rxjava3.subjects.PublishSubject;
@@ -75,8 +74,7 @@ public class FFmpegPusherImpl implements StreamPusher {
     private PublishSubject<TimeStamp> pushReportQueue = PublishSubject.create();
     private ExecutorService reportExecutor = Executors.newSingleThreadExecutor();
     private Disposable reconnectDisposable;
-
-
+    private final CompositeDisposable compositeDisposable = new CompositeDisposable();
 
     // throw IllegalArgumentException AND IllegalStateException
     @Override
@@ -107,7 +105,9 @@ public class FFmpegPusherImpl implements StreamPusher {
     @Override
     public void start() {
         if (!PushState.setState(PushState.PushStateEnum.STARTING)) {
-            String msg = String.format("start出错，IllegalState，目前状态：%s",PushState.getState().toString());
+            String msg = String.format("start出错，IllegalState，目前状态：%s",
+                    PushState.getState().toString());
+
             Timber.tag(TAG).e(msg);
             reportExecutor.submit(() -> listener.onError(0,msg));
         }
@@ -122,7 +122,7 @@ public class FFmpegPusherImpl implements StreamPusher {
                 String msg = String.format("初始化ffmpeg失败:%s",e.getMessage());
                 Timber.tag(TAG).e(e.getMessage(), "初始化ffmpeg失败");
                 if (listener != null) {
-                    reportExecutor.submit(() -> listener.onError(0,msg));
+                    Executors.newSingleThreadExecutor().submit(() -> listener.onError(0,msg));
                 }
             }
         });
@@ -138,6 +138,7 @@ public class FFmpegPusherImpl implements StreamPusher {
                 }
                 //销毁重连
                 disposeReconnect();
+                // 停止ffmpeg
                 stopFFmpeg();
 
                 if (reportExecutor != null) {
@@ -256,7 +257,6 @@ public class FFmpegPusherImpl implements StreamPusher {
                     isSuccess = false;
                     Timber.tag(TAG).e("帧写入失败: %d", ret);
                 }
-                Thread.sleep(1);
             } catch (Exception e) {
                 throw new RuntimeException(e);
             } finally {
@@ -395,7 +395,10 @@ public class FFmpegPusherImpl implements StreamPusher {
 
                     @Override
                     public void onNeedReconnect() {
-                        //ifNeedReconnect.set(true);
+                        Executors.newSingleThreadExecutor().submit(() -> {
+                            reconnect(config.maxReconnectAttempts,
+                                    config.reconnectPeriodSeconds);
+                        });
                     }
                 });
 
@@ -441,14 +444,10 @@ public class FFmpegPusherImpl implements StreamPusher {
     }
 
     private void restartPusher() {
-        if (PushState.getState() != PushState.PushStateEnum.RECONNECTING) {
-            throw new RuntimeException("状态不对，无法重连");
-        }
-
         // 先停止
         stopFFmpeg();
         try {
-            Thread.sleep(50);
+            Thread.sleep(100);
         } catch (InterruptedException ignored) {
         }
 
@@ -495,14 +494,15 @@ public class FFmpegPusherImpl implements StreamPusher {
                                     disposeReconnect();
                                     stop();
 
-                                    reportExecutor.submit(() -> {
-                                        listener.onReconnectFail();
-                                    });
-                                    throw new RuntimeException("达到最大重试次数");
+                                    if (listener != null) {
+                                        Executors.newSingleThreadExecutor().submit(() -> {
+                                            listener.onReconnectFail();
+                                        });
+                                    }
                                 }
                                 if (VideoPusher.currentState.get() != VideoPusher.PushState.RECONNECTING) {
                                     disposeReconnect();
-                                    throw new RuntimeException("状态不对，重连已销毁");
+                                    //throw new RuntimeException("状态不对，重连已销毁");
                                 }
 
                                 try {
@@ -512,9 +512,12 @@ public class FFmpegPusherImpl implements StreamPusher {
                                     //如果成功
                                     VideoPusher.currentState.set(VideoPusher.PushState.PUSHING);
                                     disposeReconnect();
-                                    reportExecutor.submit(() -> {
-                                        listener.onReconnect(true, (int)(tick + 1));
-                                    });
+
+                                    if (listener != null) {
+                                        reportExecutor.submit(() -> {
+                                            listener.onReconnect(true, (int) (tick + 1));
+                                        });
+                                    }
                                 } catch (RuntimeException e) {
                                     // 单次重连失败
                                     Timber.tag(TAG).e(e, "单次重连操作失败");
@@ -529,10 +532,11 @@ public class FFmpegPusherImpl implements StreamPusher {
                                 disposeReconnect();
                                 stop();
 
-                                reportExecutor.submit(() -> {
-                                    listener.onError(0,"重连流发生致命错误");
-                                });
-                                throw new RuntimeException("重连流发生致命错误");
+                                if (listener != null) {
+                                    Executors.newSingleThreadExecutor().submit(() -> {
+                                        listener.onError(0, "重连流发生致命错误");
+                                    });
+                                }
                             }
                     );
             compositeDisposable.add(reconnectDisposable);
@@ -558,10 +562,6 @@ public class FFmpegPusherImpl implements StreamPusher {
     private void releasePacket(AVPacket pkt) {
         av_packet_unref(pkt);
         av_packet_free(pkt);
-    }
-
-    private void notifyError(int code, String message) {
-
     }
 
     // 获取错误码对应内容

@@ -18,6 +18,8 @@ public class PushConfig {
     public final int statsIntervalSeconds;  // stats回调间隔时间（秒）
     public final int pingIntervalSeconds;    // ping间隔时间（秒）
     public final double pushFailureRateSet;// 设置丢包率大于多少重连
+    public final int maxReconnectAttempts;  // 最大重连次数
+    public final int reconnectPeriodSeconds;  // 单次重连间隔时间
 
     // 私有构造函数，只能通过Builder创建
     private PushConfig(Builder builder) {
@@ -32,6 +34,8 @@ public class PushConfig {
         this.statsIntervalSeconds = builder.statsIntervalSeconds;
         this.pingIntervalSeconds = builder.pingIntervalSeconds;
         this.pushFailureRateSet = builder.pushFailureRateSet;
+        this.maxReconnectAttempts = builder.maxReconnectAttempts;
+        this.reconnectPeriodSeconds = builder.reconnectPeriodSeconds;
     }
 
     // Builder内部类
@@ -47,6 +51,8 @@ public class PushConfig {
         private int statsIntervalSeconds;  // stats回调间隔时间（秒）
         private int pingIntervalSeconds;    // ping间隔时间（秒）
         private double pushFailureRateSet;    // 设置丢包率大于多少重连
+        private int maxReconnectAttempts;  // 最大重连次数
+        private int reconnectPeriodSeconds;  // 单次重连间隔时间
 
         public Builder setUrl(String url) {
             this.url = url;
@@ -99,6 +105,13 @@ public class PushConfig {
         // 设置丢包率大于多少重连
         public Builder setPushFailureRate(double rate) {
             this.pushFailureRateSet = rate;
+            return this;
+        }
+
+        public Builder serReconnectParam(int maxReconnectAttempts,
+                                         int reconnectPeriodSeconds) {
+            this.maxReconnectAttempts = maxReconnectAttempts;
+            this.reconnectPeriodSeconds = reconnectPeriodSeconds;
             return this;
         }
 
