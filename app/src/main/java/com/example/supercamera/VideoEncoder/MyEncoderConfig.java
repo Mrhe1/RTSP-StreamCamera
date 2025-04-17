@@ -1,6 +1,5 @@
 package com.example.supercamera.VideoEncoder;
 
-import android.media.MediaCodecInfo;
 import android.media.MediaFormat;
 import java.util.HashMap;
 import java.util.Map;
@@ -13,7 +12,7 @@ public class MyEncoderConfig {
     private final int iFrameInterval;
     public final int colorFormat;
     private final Map<String, Object> customParams;
-    private final String mimeType;
+    public final String mimeType;
     private final int profile;
     public final MediaFormat format;
 
@@ -115,4 +114,3 @@ public class MyEncoderConfig {
         }
     }
 }
-

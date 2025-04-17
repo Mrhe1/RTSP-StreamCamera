@@ -1,5 +1,8 @@
 package com.example.supercamera.VideoRecorder;
 
+import android.media.MediaCodecInfo;
+import android.media.MediaFormat;
+
 public class RecorderConfig {
     private final String url;
     private final int width;
@@ -19,7 +22,11 @@ public class RecorderConfig {
         private String url;
         private int width;
         private int height;
-        private int fps = 25; // 默认值
+        private int fps = 30; // 默认值
+        private int iFrameInterval = 1; // 默认值
+        public String mimeType = MediaFormat.MIMETYPE_VIDEO_AVC; // 默认值
+        private int profile = MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline;
+        public MediaFormat format;
 
         public Builder setUrl(String url) {
             this.url = url;
