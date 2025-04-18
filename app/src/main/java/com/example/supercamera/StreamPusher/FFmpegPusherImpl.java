@@ -309,7 +309,7 @@ public class FFmpegPusherImpl implements StreamPusher {
                 // 2. 使用alloc_output_context2自动创建上下文
                 AVOutputFormat outputFormat = av_guess_format("rtsp", null, null);
                 if (outputFormat == null) {
-                    throw new RuntimeException("FFmpeg未编译RTSP支持");
+                    throw new RuntimeException("FFFmpeg未编译RTSP支持");
                 }
 
                 PointerPointer<AVFormatContext> ctxPtr = new PointerPointer<>(1);

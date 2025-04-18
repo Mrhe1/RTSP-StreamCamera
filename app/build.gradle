@@ -74,6 +74,7 @@ dependencies {
     implementation libs.constraintlayout
     implementation libs.annotation.jvm
     implementation libs.core
+    implementation libs.play.services.fido
     //implementation fileTree(dir: 'C:\\Users\\Administrator\\.m2\\repository\\org\\bytedeco\\ffmpeg\\7.1.1-1.5.12-SNAPSHOT', include: ['*.aar', '*.jar'], exclude: [])
     testImplementation libs.junit
     androidTestImplementation libs.ext.junit

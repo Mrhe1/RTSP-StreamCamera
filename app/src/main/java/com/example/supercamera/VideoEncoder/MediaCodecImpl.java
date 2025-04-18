@@ -1,7 +1,9 @@
 package com.example.supercamera.VideoEncoder;
 
-import static com.example.supercamera.VideoEncoder.EncoderListener.ERROR_CODEC;
-import static com.example.supercamera.VideoEncoder.EncoderListener.ERROR_CODEC_START;
+import static com.example.supercamera.VideoEncoder.ErrorCode.ERROR_CODEC;
+import static com.example.supercamera.VideoEncoder.ErrorCode.ERROR_CODEC_CONFIG;
+import static com.example.supercamera.VideoEncoder.ErrorCode.ERROR_CODEC_START;
+import static com.example.supercamera.VideoEncoder.ErrorCode.ERROR_CODEC_STOP;
 
 import android.media.MediaCodec;
 import android.media.MediaCodecInfo;
@@ -12,6 +14,8 @@ import android.view.Surface;
 
 import androidx.annotation.NonNull;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -88,7 +92,7 @@ public class MediaCodecImpl implements VideoEncoder {
             });
 
         } catch (Exception e) {
-            notifyError(EncoderListener.ERROR_CODEC_CONFIG, "配置失败: " + e.getMessage());
+            notifyError(ERROR_CODEC_CONFIG, "配置失败: " + e.getMessage());
         }
     }
 
@@ -116,7 +120,7 @@ public class MediaCodecImpl implements VideoEncoder {
                 mInputSurface.release();
             }
         } catch (Exception e) {
-            notifyError(EncoderListener.ERROR_CODEC_STOP, "停止失败: " + e.getMessage());
+            notifyError(ERROR_CODEC_STOP, "停止失败: " + e.getMessage());
         }
 
         if (mEncoderExecutor != null) {
@@ -142,12 +146,16 @@ public class MediaCodecImpl implements VideoEncoder {
                 if (mInputSurface != null) {
                     mInputSurface.release();
                 }
+                break;
             }
+            default: break;
         }
 
         Executors.newSingleThreadExecutor().submit(() -> {
+            List<Integer> codeList = new ArrayList<>();
+            codeList.add(code);
             if (mListener != null) {
-                mListener.onError(code, message);
+                mListener.onError(this.getClass().getPackageName(),codeList, message);
             }
         });
     }

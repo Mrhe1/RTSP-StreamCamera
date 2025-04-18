@@ -12,6 +12,7 @@ core = "1.48.0"
 rxandroid = "3.0.2"
 rxjava = "3.1.8"
 timber = "5.0.1"
+playServicesFido = "21.2.0"
 
 [libraries]
 junit = { group = "junit", name = "junit", version.ref = "junit" }
@@ -26,6 +27,7 @@ core = { group = "com.google.ar", name = "core", version.ref = "core" }
 timber = { module = "com.jakewharton.timber:timber", version.ref = "timber" }
 rxjava = { module = "io.reactivex.rxjava3:rxjava", version.ref = "rxjava" }
 rxandroid = { module = "io.reactivex.rxjava3:rxandroid", version.ref = "rxandroid" }
+play-services-fido = { group = "com.google.android.gms", name = "play-services-fido", version.ref = "playServicesFido" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

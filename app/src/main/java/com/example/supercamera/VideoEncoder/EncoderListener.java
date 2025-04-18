@@ -4,13 +4,11 @@ import android.media.MediaCodec;
 import android.media.MediaFormat;
 import android.view.Surface;
 
-public interface EncoderListener {
-    int ERROR_CODEC_CONFIG = 0x1001;
-    int ERROR_CODEC_START = 0x1002;
-    int ERROR_CODEC_STOP = 0x1003;
-    int ERROR_CODEC = 0x1004;
+import java.util.List;
 
-    void onError(int code, String message);
+public interface EncoderListener {
+
+    void onError(String errorPackage, List<Integer> code, String message);
     void onStart(MediaFormat format);
     void onSurfaceAvailable(Surface surface);
     // 无需releaseOutputBuffer
