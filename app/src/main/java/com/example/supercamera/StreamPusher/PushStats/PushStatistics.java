@@ -216,7 +216,7 @@ public class PushStatistics {
     // 在每帧push时调用
     private void reportTimestamp(TimeStamp stamp) {
         synchronized (timestampLock) {
-            //if (VideoPusher.currentState.get() != VideoPusher.PushState.PUSHING) return;
+            //if (VideoPusher.currentState.get() != VideoPusher.PushState.RECORDING) return;
             switch (stamp.style) {
                 case Captured -> {
                     capturedTimestampQueue.add(stamp.timeStamp);

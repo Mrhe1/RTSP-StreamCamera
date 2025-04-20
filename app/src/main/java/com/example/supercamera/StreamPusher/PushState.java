@@ -37,7 +37,7 @@ public class PushState {
                 PushStateEnum current = currentState.get();
                 return switch (current) {
                         case READY -> newState == PushStateEnum.CONFIGURED || newState == PushStateEnum.ERROR;
-                        case STARTING -> newState == PushStateEnum.ERROR || newState == PushStateEnum.STOPPING;
+                        case STARTING -> newState == PushStateEnum.ERROR || newState == PushStateEnum.PUSHING;
                         case CONFIGURED -> newState == PushStateEnum.STARTING || newState == PushStateEnum.ERROR;
                         case PUSHING -> newState == PushStateEnum.ERROR || newState == PushStateEnum.STOPPING
                                 || newState == PushStateEnum.RECONNECTING;

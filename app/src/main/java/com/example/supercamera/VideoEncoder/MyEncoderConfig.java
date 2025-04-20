@@ -1,5 +1,6 @@
 package com.example.supercamera.VideoEncoder;
 
+import android.media.MediaCodecInfo;
 import android.media.MediaFormat;
 import java.util.HashMap;
 import java.util.Map;
@@ -15,6 +16,7 @@ public class MyEncoderConfig {
     public final String mimeType;
     private final int profile;
     public final MediaFormat format;
+    private final int lowLatency;
 
     private MyEncoderConfig(Builder builder) {
         this.width = builder.width;
@@ -26,6 +28,7 @@ public class MyEncoderConfig {
         this.customParams = builder.customParams;
         this.mimeType = builder.mimeType;
         this.profile = builder.profile;
+        this.lowLatency = builder.lowLatency;
 
         this.format = createMediaFormat();
     }
@@ -36,6 +39,7 @@ public class MyEncoderConfig {
         format.setInteger(MediaFormat.KEY_FRAME_RATE, fps);
         format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, iFrameInterval);
         format.setInteger(MediaFormat.KEY_PROFILE, profile);
+        format.setInteger(MediaFormat.KEY_LOW_LATENCY, lowLatency);
 
         if (colorFormat != 0) {
             format.setInteger(MediaFormat.KEY_COLOR_FORMAT, colorFormat);
@@ -61,12 +65,13 @@ public class MyEncoderConfig {
         private int iFrameInterval = 1;  // 默认1秒
         private int colorFormat = 0;     // 默认不设置
         private final Map<String, Object> customParams = new HashMap<>();
-        private String mimeType;
-        private int profile;
-        public Builder setResolution(int width, int height) {
+        private String mimeType = MediaFormat.MIMETYPE_VIDEO_AVC;
+        private int profile = MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline;
+        private int lowLatency = 0;  // 1启用
+
+        public Builder (int width, int height) {
             this.width = width;
             this.height = height;
-            return this;
         }
 
         public Builder setBitrate(int bitrateKbps) {
@@ -106,6 +111,11 @@ public class MyEncoderConfig {
 
         public Builder setProfile(int profile) {
             this.profile = profile;
+            return this;
+        }
+
+        public Builder enableLowLatency() {
+            this.lowLatency = 1;
             return this;
         }
 
