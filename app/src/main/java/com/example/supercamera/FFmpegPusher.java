@@ -685,9 +685,7 @@ public class FFmpegPusher {
                         av_write_trailer(outputContext); // 仅在成功初始化后调用
                         avio_closep(outputContext.pb());
                     }
-                    //avformat_close_input(new PointerPointer<>(outputContext));
                     avformat_free_context(outputContext);
-                    //avio_closep(outputContext.pb());
                 }
             } catch (Exception e) {
                 Timber.e(e, "释放FFmpeg资源异常");

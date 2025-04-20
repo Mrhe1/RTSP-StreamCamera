@@ -4,11 +4,13 @@ import android.media.MediaCodec;
 import android.media.MediaFormat;
 import android.view.Surface;
 
+import com.example.supercamera.MyException.MyException;
+
 import java.util.List;
 
 public interface EncoderListener {
 
-    void onError(String errorPackage, List<Integer> code, String message);
+    void onError(MyException e);
     void onStart(MediaFormat format);
     void onSurfaceAvailable(Surface surface);
     // 无需releaseOutputBuffer

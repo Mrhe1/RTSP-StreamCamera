@@ -1,5 +1,21 @@
 package com.example.supercamera.StreamPusher;
 
+import static com.example.supercamera.MyException.MyException.ILLEGAL_ARGUMENT;
+import static com.example.supercamera.MyException.MyException.ILLEGAL_STATE;
+import static com.example.supercamera.MyException.MyException.RUNTIME_ERROR;
+import static com.example.supercamera.StreamPusher.ErrorCode.ERROR_FFmpeg;
+import static com.example.supercamera.StreamPusher.ErrorCode.ERROR_FFmpeg_CONFIG;
+import static com.example.supercamera.StreamPusher.ErrorCode.ERROR_FFmpeg_Reconnect;
+import static com.example.supercamera.StreamPusher.ErrorCode.ERROR_FFmpeg_ReconnectFail;
+import static com.example.supercamera.StreamPusher.ErrorCode.ERROR_FFmpeg_START;
+import static com.example.supercamera.StreamPusher.ErrorCode.ERROR_FFmpeg_STOP;
+import static com.example.supercamera.StreamPusher.PushState.PushStateEnum.CONFIGURED;
+import static com.example.supercamera.StreamPusher.PushState.PushStateEnum.ERROR;
+import static com.example.supercamera.StreamPusher.PushState.PushStateEnum.PUSHING;
+import static com.example.supercamera.StreamPusher.PushState.PushStateEnum.READY;
+import static com.example.supercamera.StreamPusher.PushState.PushStateEnum.RECONNECTING;
+import static com.example.supercamera.StreamPusher.PushState.PushStateEnum.STARTING;
+import static com.example.supercamera.StreamPusher.PushState.PushStateEnum.STOPPING;
 import static org.bytedeco.ffmpeg.global.avcodec.AV_PKT_FLAG_KEY;
 import static org.bytedeco.ffmpeg.global.avcodec.av_new_packet;
 import static org.bytedeco.ffmpeg.global.avcodec.av_packet_alloc;
@@ -30,6 +46,7 @@ import static org.bytedeco.ffmpeg.global.avutil.av_strerror;
 
 import android.media.MediaCodec;
 
+import com.example.supercamera.MyException.MyException;
 import com.example.supercamera.StreamPusher.PushStats.PushStatistics;
 import com.example.supercamera.StreamPusher.PushStats.PushStatsInfo;
 import com.example.supercamera.StreamPusher.PushStats.PushStatsListener;
@@ -66,6 +83,9 @@ public class FFmpegPusherImpl implements StreamPusher {
     private PushListener listener;
     private final Object FFmpegLock = new Object();
     private final Object reconnectLock = new Object();
+    // 外部调用锁
+    private final Object publicLock = new Object();
+    private final Object onErrorLock = new Object();
     private int startCount = 0;
     private AVFormatContext outputContext;
     private AVStream videoStream;
@@ -79,58 +99,80 @@ public class FFmpegPusherImpl implements StreamPusher {
     // throw IllegalArgumentException AND IllegalStateException
     @Override
     public void configure(PushConfig config) {
-        if(!PushState.setState(PushState.PushStateEnum.CONFIGURED)) {
-            String msg = String.format("configure出错，IllegalState，目前状态：%s",PushState.getState().toString());
-            Timber.tag(TAG).e(msg);
-            throw new IllegalStateException(msg);
+        synchronized (publicLock) {
+            if (PushState.getState() != READY) {
+                String msg = String.format("configure出错，IllegalState，目前状态：%s",
+                        PushState.getState().toString());
+                Timber.tag(TAG).e(msg);
+                throw throwException(ILLEGAL_STATE, ERROR_FFmpeg_CONFIG, msg);
+            }
+
+            if (config.url.startsWith("rtsp://")) {
+                Timber.tag(TAG).e("URL必须以rtsp://开头");
+                throw throwException(ILLEGAL_ARGUMENT, ERROR_FFmpeg_CONFIG,
+                        "URL必须以rtsp://开头");
+            }
+
+            if (config.header == null || config.Bitrate <= 0 ||
+                    config.fps <= 0 || config.height <= 0 || config.width <= 0) {
+                Timber.tag(TAG).e("config参数错误");
+                throw throwException(ILLEGAL_ARGUMENT, ERROR_FFmpeg_CONFIG,
+                        "config参数错误");
+            }
+
+            this.mConfig = config;
+
+            // 设置AVCodecParameters
+            this.params = setEncoderParameters(config, params);
+
+            PushState.setState(CONFIGURED);
         }
-
-        if(config.url.startsWith("rtsp://")) {
-            Timber.tag(TAG).e("URL必须以rtsp://开头");
-            throw new IllegalArgumentException("URL必须以rtsp://开头");
-        }
-
-        if(config.header == null || config.Bitrate <= 0 ||
-                config.fps <= 0 || config.height <= 0 || config.width <= 0) {
-            Timber.tag(TAG).e("config参数错误");
-            throw new IllegalArgumentException("config参数错误");
-        }
-
-        this.mConfig = config;
-
-        // 设置AVCodecParameters
-        this.params = setEncoderParameters(config, params);
     }
 
+    // throw IllegalStateException
     @Override
     public void start() {
-        if (!PushState.setState(PushState.PushStateEnum.STARTING)) {
-            String msg = String.format("start出错，IllegalState，目前状态：%s",
-                    PushState.getState().toString());
-
-            Timber.tag(TAG).e(msg);
-            reportExecutor.submit(() -> listener.onError(0,msg));
-        }
-
-        Executors.newSingleThreadExecutor().submit(() -> {
-            try {
-                startFFmpeg(mConfig);
-                if (listener != null) {
-                    reportExecutor.submit(() -> listener.onStarted());
-                }
-            } catch (Exception e) {
-                String msg = String.format("初始化ffmpeg失败:%s",e.getMessage());
-                Timber.tag(TAG).e(e.getMessage(), "初始化ffmpeg失败");
-                if (listener != null) {
-                    Executors.newSingleThreadExecutor().submit(() -> listener.onError(0,msg));
-                }
+        synchronized (publicLock) {
+            if (PushState.getState() != CONFIGURED) {
+                String msg = String.format("start出错，IllegalState，目前状态：%s",
+                        PushState.getState().toString());
+                Timber.tag(TAG).e(msg);
+                throw throwException(ILLEGAL_STATE, ERROR_FFmpeg_START, msg);
             }
-        });
+
+            PushState.setState(STARTING);
+
+            Executors.newSingleThreadExecutor().submit(() -> {
+                try {
+                    startFFmpeg(mConfig);
+
+                    PushState.setState(PUSHING);
+                    if (listener != null) {
+                        reportExecutor.submit(() -> listener.onStarted());
+                    }
+                } catch (Exception e) {
+                    String msg = String.format("初始化ffmpeg失败:%s", e.getMessage());
+                    Timber.tag(TAG).e(e.getMessage(), "初始化ffmpeg失败");
+                    notifyError(RUNTIME_ERROR, ERROR_FFmpeg_START, msg);
+                }
+            });
+        }
     }
 
+    // throw IllegalStateException
     @Override
     public void stop() {
-        synchronized (FFmpegLock) {
+        synchronized (publicLock) {
+            if (PushState.getState() != PUSHING &&
+                    PushState.getState() != RECONNECTING) {
+                String msg = String.format("stop出错，IllegalState，目前状态：%s",
+                        PushState.getState().toString());
+                Timber.tag(TAG).e(msg);
+                throw throwException(ILLEGAL_STATE, ERROR_FFmpeg_STOP, msg);
+            }
+
+            PushState.setState(STOPPING);
+
             try {
                 if (statistics != null) {
                     // 停止统计
@@ -144,125 +186,128 @@ public class FFmpegPusherImpl implements StreamPusher {
                 if (reportExecutor != null) {
                     reportExecutor.shutdown();
                 }
+
+                PushState.setState(READY);
             } catch (Exception e) {
-                Timber.tag(TAG).e(e,"停止FFmpeg出错");
+                Timber.tag(TAG).e(e, "停止FFmpeg出错");
+                notifyError(RUNTIME_ERROR, ERROR_FFmpeg_STOP, e.getMessage());
             }
         }
     }
 
-    // throw RuntimeException
     @Override
     public void pushFrame(ByteBuffer data, MediaCodec.BufferInfo bufferInfo, Long encodedTime) {
-        synchronized (FFmpegLock) {
-            if (PushState.getState() != PushState.PushStateEnum.PUSHING
-                    || (bufferInfo.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
-                return;
-            }
-
-            // 关键指针状态检查
-            if (outputContext == null || outputContext.isNull() ||
-                    videoStream == null || videoStream.isNull()) {
-                Timber.tag(TAG).d("推流上下文未初始化，丢弃帧数据");
-                return;
-            }
-
-            boolean isSuccess = true;
-            AVPacket pkt = acquirePacket();
-            try {
-                // 验证bufferInfo参数有效性
-                if (bufferInfo.offset < 0 || bufferInfo.size <= 0
-                        || (bufferInfo.offset + bufferInfo.size) > data.capacity()) {
-                    Timber.tag(TAG).e("无效的BufferInfo参数: offset=%d, size=%d, capacity=%d",
-                            bufferInfo.offset, bufferInfo.size, data.capacity());
+        synchronized (publicLock) {
+            synchronized (FFmpegLock) {
+                if (PushState.getState() != PushState.PushStateEnum.PUSHING
+                        || (bufferInfo.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
                     return;
                 }
 
-                int ret = av_new_packet(pkt, bufferInfo.size);
-                if (ret < 0) {
-                    Timber.tag(TAG).e("帧写入分配内存失败: %s", av_err2str(ret));
+                // 关键指针状态检查
+                if (outputContext == null || outputContext.isNull() ||
+                        videoStream == null || videoStream.isNull()) {
+                    Timber.tag(TAG).d("推流上下文未初始化，丢弃帧数据");
                     return;
                 }
 
-                if (pkt == null || data == null || bufferInfo == null) {
-                    Timber.tag(TAG).w("Invalid null object detected");
-                    return;
-                }
-
+                boolean isSuccess = true;
+                AVPacket pkt = acquirePacket();
                 try {
-                    BytePointer dstPtr = pkt.data();
-                    if (dstPtr == null) {
-                        Timber.tag(TAG).w("Packet data is null");
+                    // 验证bufferInfo参数有效性
+                    if (bufferInfo.offset < 0 || bufferInfo.size <= 0
+                            || (bufferInfo.offset + bufferInfo.size) > data.capacity()) {
+                        Timber.tag(TAG).e("无效的BufferInfo参数: offset=%d, size=%d, capacity=%d",
+                                bufferInfo.offset, bufferInfo.size, data.capacity());
                         return;
                     }
 
-                    // 创建临时局部变量避免竞态条件
-                    final int targetOffset = bufferInfo.offset;
-                    final int targetSize = bufferInfo.size;
-                    final int bufferCapacity = data.capacity();
-
-                    // 验证偏移量和大小有效性
-                    if (targetOffset < 0 || targetSize <= 0 || (targetOffset + targetSize) > bufferCapacity) {
-                        Timber.tag(TAG).e("Invalid buffer range: offset=%d size=%d capacity=%d",
-                                targetOffset, targetSize, bufferCapacity);
+                    int ret = av_new_packet(pkt, bufferInfo.size);
+                    if (ret < 0) {
+                        Timber.tag(TAG).e("帧写入分配内存失败: %s", av_err2str(ret));
                         return;
                     }
 
-                    BytePointer srcPtr = new BytePointer(data);
-                    if (srcPtr == null) {
-                        Timber.tag(TAG).w("Failed to create source pointer");
+                    if (pkt == null || data == null || bufferInfo == null) {
+                        Timber.tag(TAG).w("Invalid null object detected");
                         return;
                     }
 
-                    synchronized (data) {
-                        int oldPosition = data.position();
-                        int oldLimit = data.limit();
-                        try {
-                            data.position(targetOffset);
-                            data.limit(targetOffset + targetSize);
-                            srcPtr.position(targetOffset).limit(targetOffset + targetSize);
-
-                            if (dstPtr == null || srcPtr == null ||
-                                    dstPtr.address() == 0 || srcPtr.address() == 0) {
-                                Timber.tag(TAG).w("Invalid pointer detected");
-                                return;
-                            }
-
-                            dstPtr.put(srcPtr);
-                            dstPtr.get();
-                        } finally {
-                            data.position(oldPosition);
-                            data.limit(oldLimit);
+                    try {
+                        BytePointer dstPtr = pkt.data();
+                        if (dstPtr == null) {
+                            Timber.tag(TAG).w("Packet data is null");
+                            return;
                         }
+
+                        // 创建临时局部变量避免竞态条件
+                        final int targetOffset = bufferInfo.offset;
+                        final int targetSize = bufferInfo.size;
+                        final int bufferCapacity = data.capacity();
+
+                        // 验证偏移量和大小有效性
+                        if (targetOffset < 0 || targetSize <= 0 || (targetOffset + targetSize) > bufferCapacity) {
+                            Timber.tag(TAG).e("Invalid buffer range: offset=%d size=%d capacity=%d",
+                                    targetOffset, targetSize, bufferCapacity);
+                            return;
+                        }
+
+                        BytePointer srcPtr = new BytePointer(data);
+                        if (srcPtr == null) {
+                            Timber.tag(TAG).w("Failed to create source pointer");
+                            return;
+                        }
+
+                        synchronized (data) {
+                            int oldPosition = data.position();
+                            int oldLimit = data.limit();
+                            try {
+                                data.position(targetOffset);
+                                data.limit(targetOffset + targetSize);
+                                srcPtr.position(targetOffset).limit(targetOffset + targetSize);
+
+                                if (dstPtr == null || srcPtr == null ||
+                                        dstPtr.address() == 0 || srcPtr.address() == 0) {
+                                    Timber.tag(TAG).w("Invalid pointer detected");
+                                    return;
+                                }
+
+                                dstPtr.put(srcPtr);
+                                dstPtr.get();
+                            } finally {
+                                data.position(oldPosition);
+                                data.limit(oldLimit);
+                            }
+                        }
+                    } catch (Exception e) {
+                        Timber.tag(TAG).e(e, "Unexpected error during buffer copy");
                     }
-                } catch (Exception e) {
-                    Timber.tag(TAG).e(e, "Unexpected error during buffer copy");
-                }
 
-                // 时间基计算(使用微秒时间基)
-                AVRational srcTimeBase = new AVRational().num(1).den(1000000);
-                pkt.pts(av_rescale_q(bufferInfo.presentationTimeUs,
-                        srcTimeBase,
-                        videoStream.time_base()));
-                pkt.dts(AV_NOPTS_VALUE); // 让FFmpeg自动计算
-                pkt.stream_index(videoStream.index());
-                int flags = (bufferInfo.flags & MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0 ? AV_PKT_FLAG_KEY : 0;
-                pkt.flags(flags);
-                ret = av_interleaved_write_frame(outputContext, pkt);
+                    // 时间基计算(使用微秒时间基)
+                    AVRational srcTimeBase = new AVRational().num(1).den(1000000);
+                    pkt.pts(av_rescale_q(bufferInfo.presentationTimeUs,
+                            srcTimeBase,
+                            videoStream.time_base()));
+                    pkt.dts(AV_NOPTS_VALUE); // 让FFmpeg自动计算
+                    pkt.stream_index(videoStream.index());
+                    int flags = (bufferInfo.flags & MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0 ? AV_PKT_FLAG_KEY : 0;
+                    pkt.flags(flags);
+                    ret = av_interleaved_write_frame(outputContext, pkt);
 
-                // 记录发送时间戳（纳秒）
-                pushReportQueue.onNext(new TimeStamp(TimeStamp.TimeStampStyle.Pushed,
-                        System.nanoTime() - encodedTime));
+                    // 记录发送时间戳（纳秒）
+                    pushReportQueue.onNext(new TimeStamp(TimeStamp.TimeStampStyle.Pushed,
+                            System.nanoTime() - encodedTime));
 
-                if (ret < 0) {
-                    isSuccess = false;
-                    Timber.tag(TAG).e("帧写入失败: %d", ret);
-                }
-            } catch (Exception e) {
-                throw new RuntimeException(e);
-            } finally {
-                statistics.setPushStatistics(isSuccess, bufferInfo.size);
-                if (pkt != null && !pkt.isNull()) {
-                    releasePacket(pkt);
+                    if (ret < 0) {
+                        isSuccess = false;
+                        Timber.tag(TAG).e("帧写入失败: %d", ret);
+                    }
+                } catch (Exception ignored) {
+                } finally {
+                    statistics.setPushStatistics(isSuccess, bufferInfo.size);
+                    if (pkt != null && !pkt.isNull()) {
+                        releasePacket(pkt);
+                    }
                 }
             }
         }
@@ -271,7 +316,9 @@ public class FFmpegPusherImpl implements StreamPusher {
 
     @Override
     public void setStreamListener(PushListener listener) {
-        this.listener = listener;
+        synchronized (publicLock) {
+            this.listener = listener;
+        }
     }
 
     private AVCodecParameters setEncoderParameters(PushConfig config,
@@ -462,7 +509,7 @@ public class FFmpegPusherImpl implements StreamPusher {
 
     private void reconnect(int MAX_RECONNECT_ATTEMPTS, int periodSeconds) {
         synchronized (reconnectLock) {
-            if (!VideoPusher.setState(VideoPusher.PushState.RECONNECTING)) {
+            if (!PushState.setState(RECONNECTING)) {
                 Timber.tag(TAG).w("已有正在进行的重连任务");
                 return;
             }
@@ -489,20 +536,15 @@ public class FFmpegPusherImpl implements StreamPusher {
                     .subscribe(
                             tick -> {
                                 if (tick >= MAX_RECONNECT_ATTEMPTS - 1) {
-                                    Timber.tag(TAG).e("达到最大重试次数");
-                                    VideoPusher.setState(VideoPusher.PushState.ERROR);
+                                    Timber.tag(TAG).e("达到最大重连次数");
                                     disposeReconnect();
                                     stop();
 
-                                    if (listener != null) {
-                                        Executors.newSingleThreadExecutor().submit(() -> {
-                                            listener.onReconnectFail();
-                                        });
-                                    }
+                                    notifyError(RUNTIME_ERROR, ERROR_FFmpeg_ReconnectFail,
+                                            "达到最大重连次数");
                                 }
-                                if (VideoPusher.currentState.get() != VideoPusher.PushState.RECONNECTING) {
+                                if (PushState.getState() != RECONNECTING) {
                                     disposeReconnect();
-                                    //throw new RuntimeException("状态不对，重连已销毁");
                                 }
 
                                 try {
@@ -510,7 +552,7 @@ public class FFmpegPusherImpl implements StreamPusher {
                                     restartPusher();
 
                                     //如果成功
-                                    VideoPusher.currentState.set(VideoPusher.PushState.PUSHING);
+                                    PushState.setState(PUSHING);
                                     disposeReconnect();
 
                                     if (listener != null) {
@@ -528,15 +570,11 @@ public class FFmpegPusherImpl implements StreamPusher {
                             },
                             throwable -> {
                                 Timber.tag(TAG).e(throwable, "重连流发生致命错误");
-                                VideoPusher.currentState.set(VideoPusher.PushState.ERROR);
                                 disposeReconnect();
                                 stop();
 
-                                if (listener != null) {
-                                    Executors.newSingleThreadExecutor().submit(() -> {
-                                        listener.onError(0, "重连流发生致命错误");
-                                    });
-                                }
+                                notifyError(RUNTIME_ERROR,
+                                        ERROR_FFmpeg_Reconnect,"重连流发生致命错误");
                             }
                     );
             compositeDisposable.add(reconnectDisposable);
@@ -572,4 +610,81 @@ public class FFmpegPusherImpl implements StreamPusher {
         }
     }
 
+    //
+    //---------------------------------
+    //---------------------------------
+    //  ERROR Handler  ****************
+    //---------------------------------
+    //---------------------------------
+    //
+
+    private MyException throwException(int type, int code, String message) {
+        return new MyException(this.getClass().getPackageName(),
+                type, code, message);
+    }
+
+    private void notifyError(int type,int code, String message) {
+        synchronized (onErrorLock) {
+            if (PushState.getState() == ERROR &&
+                    PushState.getState() == READY) return;
+
+            PushState.setState(ERROR);
+
+            switch (code) {
+                case ERROR_FFmpeg_START, ERROR_FFmpeg -> errorStop_TypeA();
+                case ERROR_FFmpeg_Reconnect, ERROR_FFmpeg_ReconnectFail
+                        -> errorStop_TypeB();
+            }
+
+            PushState.setState(READY);
+
+            MyException e = new MyException(this.getClass().getPackageName(),
+                    type, code, message);
+
+            if(listener != null) {
+                if(code == ERROR_FFmpeg_ReconnectFail ||
+                code == ERROR_FFmpeg_Reconnect) {
+                    listener.onReconnectFail(e);
+                }else {
+                    listener.onError(e);
+                }
+            }
+        }
+    }
+
+    private void errorStop_TypeA() {
+        try {
+            if (statistics != null) {
+                // 停止统计
+                statistics.stopPushStatistics();
+            }
+            //销毁重连
+            disposeReconnect();
+            // 停止ffmpeg
+            stopFFmpeg();
+
+            if (reportExecutor != null) {
+                reportExecutor.shutdown();
+            }
+
+            PushState.setState(READY);
+        } catch (Exception ignored) {}
+    }
+
+    private void errorStop_TypeB() {
+        try {
+            if (statistics != null) {
+                // 停止统计
+                statistics.stopPushStatistics();
+            }
+            // 停止ffmpeg
+            stopFFmpeg();
+
+            if (reportExecutor != null) {
+                reportExecutor.shutdown();
+            }
+
+            PushState.setState(READY);
+        } catch (Exception ignored) {}
+    }
 }

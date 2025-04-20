@@ -43,7 +43,7 @@ public class PushState {
                                 || newState == PushStateEnum.RECONNECTING;
                         case RECONNECTING -> newState == PushStateEnum.ERROR || newState == PushStateEnum.PUSHING
                                 || newState == PushStateEnum.STOPPING;
-                        case ERROR -> newState == PushStateEnum.STOPPING;
+                        case ERROR -> newState == PushStateEnum.STOPPING || newState == PushStateEnum.READY;
                         case STOPPING -> newState == PushStateEnum.READY || newState == PushStateEnum.ERROR;
                         default -> false;
                 };
