@@ -62,15 +62,16 @@ public class MediaCodecImpl implements VideoEncoder {
                                 MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface) return;
 
                         if (mListener != null) {
-                            mListener.onInputBufferAvailable(index);
+                            mListener.onInputBufferAvailable(codec, index);
                         }
                     }
 
+                    // 调用时无需release OutputBuffer
                     @Override
                     public void onOutputBufferAvailable(@NonNull MediaCodec codec, int index,
                                                         @NonNull MediaCodec.BufferInfo info) {
                         if (mListener != null) {
-                            mListener.onOutputBufferAvailable(index, info);
+                            mListener.onOutputBufferAvailable(codec, index, info);
                         }
 
                         try {
@@ -90,7 +91,7 @@ public class MediaCodecImpl implements VideoEncoder {
                                                       @NonNull MediaFormat format) {
                         reportExecutor.submit(() -> {
                             if (mListener != null) {
-                                mListener.onStart(format);
+                                mListener.onStart(codec, format);
                             }
                         });
                     }
@@ -141,6 +142,11 @@ public class MediaCodecImpl implements VideoEncoder {
 
         synchronized (publicLock) {
             try {
+                // 发送编码结束信号前等待所有buffer处理
+                if (mMediaCodec != null) {
+                    mMediaCodec.signalEndOfInputStream();
+                    Thread.sleep(50); // 等待50ms确保回调完成
+                }
                 if (mMediaCodec != null) {
                     mMediaCodec.stop();
                     mMediaCodec.release();

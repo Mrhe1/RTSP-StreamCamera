@@ -9,7 +9,8 @@ public class RecorderConfig {
     public final int fps;
     public final int iFrameInterval;
     public final String mimeType;
-    private final int profile;
+    public final int profile;
+    public final int bitrate; // 4mbps
 
     private RecorderConfig(Builder builder) {
         this.width = builder.width;
@@ -18,6 +19,7 @@ public class RecorderConfig {
         this.iFrameInterval = builder.iFrameInterval;
         this.mimeType = builder.mimeType;
         this.profile = builder.profile;
+        this.bitrate = builder.bitrate;
     }
 
     public static class Builder {
@@ -30,6 +32,7 @@ public class RecorderConfig {
         private int iFrameInterval = 1;
         private String mimeType = MediaFormat.MIMETYPE_VIDEO_AVC;
         private int profile = MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline;
+        private int bitrate = 4_000; // 4mbps
 
         public Builder(int width, int height) {
             this.width = width;
@@ -53,6 +56,11 @@ public class RecorderConfig {
 
         public Builder setProfile(int profile) {
             this.profile = profile;
+            return this;
+        }
+
+        public Builder setBitrate(int bitrateKbps) {
+            this.bitrate = bitrateKbps;
             return this;
         }
 

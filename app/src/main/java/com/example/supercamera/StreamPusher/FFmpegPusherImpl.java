@@ -51,7 +51,6 @@ import com.example.supercamera.StreamPusher.PushStats.PushStatistics;
 import com.example.supercamera.StreamPusher.PushStats.PushStatsInfo;
 import com.example.supercamera.StreamPusher.PushStats.PushStatsListener;
 import com.example.supercamera.StreamPusher.PushStats.TimeStamp;
-import com.example.supercamera.VideoPusher;
 
 import org.bytedeco.ffmpeg.avcodec.AVCodecParameters;
 import org.bytedeco.ffmpeg.avcodec.AVPacket;
@@ -148,7 +147,7 @@ public class FFmpegPusherImpl implements StreamPusher {
 
                     PushState.setState(PUSHING);
                     if (listener != null) {
-                        reportExecutor.submit(() -> listener.onStarted());
+                        reportExecutor.submit(() -> listener.onStart());
                     }
                 } catch (Exception e) {
                     String msg = String.format("初始化ffmpeg失败:%s", e.getMessage());

@@ -11,9 +11,9 @@ import java.util.List;
 public interface EncoderListener {
 
     void onError(MyException e);
-    void onStart(MediaFormat format);
+    void onStart(MediaCodec codec, MediaFormat format);
     void onSurfaceAvailable(Surface surface);
     // 无需releaseOutputBuffer
-    void onOutputBufferAvailable(int index, MediaCodec.BufferInfo info);
-    void onInputBufferAvailable(int index);
+    void onOutputBufferAvailable(MediaCodec codec, int index, MediaCodec.BufferInfo info);
+    void onInputBufferAvailable(MediaCodec codec, int index);
 }
