@@ -112,8 +112,8 @@ public class FFmpegPusherImpl implements StreamPusher {
                         "URL必须以rtsp://开头");
             }
 
-            if (config.header == null || config.Bitrate <= 0 ||
-                    config.fps <= 0 || config.height <= 0 || config.width <= 0) {
+            if (config.BitrateKbps <= 0 || config.fps <= 0 ||
+                    config.height <= 0 || config.width <= 0) {
                 Timber.tag(TAG).e("config参数错误");
                 throw throwException(ILLEGAL_ARGUMENT, ERROR_FFmpeg_CONFIG,
                         "config参数错误");
@@ -128,6 +128,16 @@ public class FFmpegPusherImpl implements StreamPusher {
         }
     }
 
+    @Override
+    public void setHeader(byte[] header) {
+        mConfig.setHeader(header);
+    }
+
+    @Override
+    public void setTimeStampQueue(List<PublishSubject<TimeStamp>> timeStampQueue) {
+        mConfig.setTimeStampQueue(timeStampQueue);
+    }
+
     // throw IllegalStateException
     @Override
     public void start() {
@@ -137,6 +147,12 @@ public class FFmpegPusherImpl implements StreamPusher {
                         PushState.getState().toString());
                 Timber.tag(TAG).e(msg);
                 throw throwException(ILLEGAL_STATE, ERROR_FFmpeg_START, msg);
+            }
+
+            if(mConfig.header == null || mConfig.timeStampQueue == null) {
+                Timber.tag(TAG).e("header或timeStampQueue为null，未设置");
+                throw throwException(ILLEGAL_ARGUMENT, ERROR_FFmpeg_START,
+                        "header或timeStampQueue为null，未设置");
             }
 
             PushState.setState(STARTING);
@@ -327,10 +343,12 @@ public class FFmpegPusherImpl implements StreamPusher {
         }
         try {
             params.codec_type(AVMEDIA_TYPE_VIDEO);
-            params.codec_id(config.codecID);
+            if (config.codecID != -1) {
+                params.codec_id(config.codecID);
+            }
             params.width(config.width);
             params.height(config.height);
-            params.bit_rate(config.Bitrate);
+            params.bit_rate(config.BitrateKbps * 1000L);
             return params.retainReference(); // 保持引用计数
         } catch (Exception e) {
             avcodec_parameters_free(params); // 异常时释放内存

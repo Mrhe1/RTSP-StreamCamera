@@ -1,5 +1,7 @@
 package com.example.supercamera.StreamPusher;
 
+import static org.bytedeco.ffmpeg.global.avcodec.AV_CODEC_ID_H264;
+
 import com.example.supercamera.StreamPusher.PushStats.TimeStamp;
 
 import java.util.List;
@@ -11,15 +13,15 @@ public class PushConfig {
     public final int width;
     public final int height;
     public final int fps;
-    public final int Bitrate;
-    public final byte[] header;
+    public final int BitrateKbps;
     public final int codecID;
-    public final List<PublishSubject<TimeStamp>> timeStampQueue;
+    public List<PublishSubject<TimeStamp>> timeStampQueue;
     public final int statsIntervalSeconds;  // stats回调间隔时间（秒）
     public final int pingIntervalSeconds;    // ping间隔时间（秒）
     public final double pushFailureRateSet;// 设置丢包率大于多少重连
     public final int maxReconnectAttempts;  // 最大重连次数
     public final int reconnectPeriodSeconds;  // 单次重连间隔时间
+    public byte[] header;
 
     // 私有构造函数，只能通过Builder创建
     private PushConfig(Builder builder) {
@@ -27,10 +29,8 @@ public class PushConfig {
         this.width = builder.width;
         this.height = builder.height;
         this.fps = builder.fps;
-        this.Bitrate = builder.Bitrate;
-        this.header = builder.header;
+        this.BitrateKbps = builder.BitrateKbps;
         this.codecID = builder.codecID;
-        this.timeStampQueue = builder.timeStampQueue;
         this.statsIntervalSeconds = builder.statsIntervalSeconds;
         this.pingIntervalSeconds = builder.pingIntervalSeconds;
         this.pushFailureRateSet = builder.pushFailureRateSet;
@@ -38,31 +38,34 @@ public class PushConfig {
         this.reconnectPeriodSeconds = builder.reconnectPeriodSeconds;
     }
 
+    public void setHeader(byte[] header) {
+        this.header = header;
+    }
+
+    // 指定报告TimeStamp的消息队列
+    public void setTimeStampQueue(List<PublishSubject<TimeStamp>> timeStampQueue) {
+        this.timeStampQueue = timeStampQueue;
+    }
+
+
     // Builder内部类
     public static class Builder {
         private String url;
         private int width;
         private int height;
-        private int fps;
-        private int Bitrate;
-        private byte[] header;
-        private int codecID;
-        private List<PublishSubject<TimeStamp>> timeStampQueue;
-        private int statsIntervalSeconds;  // stats回调间隔时间（秒）
-        private int pingIntervalSeconds;    // ping间隔时间（秒）
-        private double pushFailureRateSet;    // 设置丢包率大于多少重连
-        private int maxReconnectAttempts;  // 最大重连次数
-        private int reconnectPeriodSeconds;  // 单次重连间隔时间
+        private int fps = 30;
+        private int BitrateKbps = 4_000;
+        private int codecID = AV_CODEC_ID_H264;
+        private int statsIntervalSeconds = 4;  // stats回调间隔时间（秒）
+        private int pingIntervalSeconds = 6;    // ping间隔时间（秒）
+        private double pushFailureRateSet = 0.6;    // 设置丢包率大于多少重连
+        private int maxReconnectAttempts = 4;  // 最大重连次数
+        private int reconnectPeriodSeconds = 4;  // 单次重连间隔时间
 
-        public Builder setUrl(String url) {
+        public Builder(String url, int width, int height) {
             this.url = url;
-            return this; // 返回自身以实现链式调用
-        }
-
-        public Builder setResolution(int width, int height) {
             this.width = width;
             this.height = height;
-            return this;
         }
 
         public Builder setFPS(int fps) {
@@ -70,25 +73,14 @@ public class PushConfig {
             return this;
         }
 
-        public Builder setBitrate(int bitrate) {
-            this.Bitrate = bitrate;
-            return this;
-        }
-
-        public Builder setHeader(byte[] header) {
-            this.header = header;
+        public Builder setBitrateKbps(int bitrateKbps) {
+            this.BitrateKbps = bitrateKbps;
             return this;
         }
 
         // org. bytedeco. ffmpeg. avcodec. AVCodecParameters  codec_id
         public Builder setCodecID(int codecID) {
             this.codecID = codecID;
-            return this;
-        }
-
-        // 指定报告TimeStamp的消息队列
-        public Builder setTimeStampQueue(List<PublishSubject<TimeStamp>> timeStampQueue) {
-            this.timeStampQueue = timeStampQueue;
             return this;
         }
 
@@ -116,7 +108,6 @@ public class PushConfig {
         }
 
         public PushConfig build() {
-            // 构建不可变配置对象
             return new PushConfig(this);
         }
     }

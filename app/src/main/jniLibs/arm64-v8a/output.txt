@@ -22408,13 +22408,13 @@ unspecified pixel format
 no frame in rv30/40 and no sar
 extract_extradata
 stream %u: start_time: %s duration: %s
-format: start_time: %s duration: %s (estimate from %s) bitrate=%ld kb/s
+format: start_time: %s duration: %s (estimate from %s) bitrateKbps=%ld kb/s
 start time for stream %d is not set in estimate_timings_from_pts
 Skipping duration calculation in estimate_timings_from_pts
 skip_changes
 stream %d : no PTS found at end of file, duration not set
 stream %d : no TS found at start of file, duration not set
-Estimating duration from bitrate, this may be inaccurate
+Estimating duration from bitrateKbps, this may be inaccurate
 Ignoring outlier non primary stream starttime %f
 Ignoring outlier non primary stream endtime %f
 Ignoring outlier non primary stream duration %f
@@ -22488,7 +22488,7 @@ Output
 %02ld:%02ld:%02ld.%02ld
 , start: 
 %s%d.%06d
-, bitrate: 
+, bitrateKbps:
 %ld kb/s
   Chapters:
     Chapter #%d:%d: 
@@ -22574,7 +22574,7 @@ commentary
 emergency
 voice over
 karaoke
-bitrate max/min/avg: %ld/%ld/%ld buffer size: %ld 
+bitrateKbps max/min/avg: %ld/%ld/%ld buffer size: %ld
 vbv_delay: N/A
 vbv_delay: %lu
 Mastering Display Metadata, has_primaries:%d has_luminance:%d r(%5.4f,%5.4f) g(%5.4f,%5.4f) b(%5.4f %5.4f) wp(%5.4f, %5.4f) min_luminance=%f, max_luminance=%f
@@ -23217,7 +23217,7 @@ recorded
 	<deliveryType>streaming</deliveryType>
 	<duration>%f</duration>
 	<bootstrapInfo profile="named" url="stream%d.abst" id="bootstrap%d" />
-	<media bitrate="%d" url="stream%d" bootstrapInfoId="bootstrap%d">
+	<media bitrateKbps="%d" url="stream%d" bootstrapInfoId="bootstrap%d">
 		<metadata>%s</metadata>
 	</media>
 </manifest>
@@ -23450,7 +23450,7 @@ master_pl_publish_rate
 Publish master play list every after this many segment intervals
 Ignore IO errors for stable long-duration runs with network output
 set custom HTTP headers, can override built in default headers
-Your video bitrate is bigger than hls_segment_size, (%ld > %ld), the result maybe not be what you want.
+Your video bitrateKbps is bigger than hls_segment_size, (%ld > %ld), the result maybe not be what you want.
 Stream HEVC is not hvc1, you should use tag:v hvc1 to set it.
 avc1.%02x%02x%02x
 %s.%d.4.L%d.B01
@@ -26458,7 +26458,7 @@ usetoc
 use table of contents
 Failed to find two consecutive MPEG audio frames.
 Skipping %d bytes of junk at %ld.
-invalid concatenated file detected - using bitrate for duration
+invalid concatenated file detected - using bitrateKbps for duration
 filesize and duration do not match (growing file?)
 pad %d %d
 Cannot determine file size, skipping TOC table.
@@ -29588,17 +29588,17 @@ no video stream and no min frag duration set
 %s/Manifest.tmp
 <SmoothStreamingMedia MajorVersion="2" MinorVersion="0" Duration="%lu"
  IsLive="true" LookAheadFragmentCount="%d" DVRWindowLength="0"
-<StreamIndex Type="video" QualityLevels="%d" Chunks="%d" Url="QualityLevels({bitrate})/Fragments(video={start time})">
+<StreamIndex Type="video" QualityLevels="%d" Chunks="%d" Url="QualityLevels({bitrateKbps})/Fragments(video={start time})">
 <QualityLevel Index="%d" Bitrate="%ld" FourCC="%s" MaxWidth="%d" MaxHeight="%d" CodecPrivateData="%s" />
 </StreamIndex>
-<StreamIndex Type="audio" QualityLevels="%d" Chunks="%d" Url="QualityLevels({bitrate})/Fragments(audio={start time})">
+<StreamIndex Type="audio" QualityLevels="%d" Chunks="%d" Url="QualityLevels({bitrateKbps})/Fragments(audio={start time})">
 <QualityLevel Index="%d" Bitrate="%ld" FourCC="%s" SamplingRate="%d" Channels="%d" BitsPerSample="16" PacketSize="%d" AudioTag="%d" CodecPrivateData="%s" />
 </SmoothStreamingMedia>
 <c t="%lu" d="%lu" />
 <c n="%d" d="%lu" />
 %s/temp
-calculating bitrate got zero.
-calculated bitrate: %ld
+calculating bitrateKbps got zero.
+calculated bitrateKbps: %ld
 %s/FragmentInfo(%s=%lu)
 %s/Fragments(%s=%lu)
 smush
@@ -29635,14 +29635,14 @@ Unrecognized large DTS frame
 HD mode not supported for this format
 Unknown DTS sample rate for HD
 Specified HD rate of %d Hz would require an impossible repetition period of %d for the current DTS stream (blocks = %d, sample rate = %d)
-DTS-HD bitrate too high, temporarily sending core only
+DTS-HD bitrateKbps too high, temporarily sending core only
 Wrong AAC file format
 %u samples in AAC frame not supported
 TrueHD samples per frame: %d
 delta_samples: %u, delta_bytes: %d
 Unusual frame timing: %u => %u, %d samples/frame
 TrueHD frame inserted, total size %d, buffer position %d
-bitrate is too high
+bitrateKbps is too high
 type=%x len=%i pkt_offset=%i
 SubRip subtitle
  --> 
@@ -29868,7 +29868,7 @@ ttl(%d) should be in range [0,255]
 udplite_coverage
 fifo_size
 'circular_buffer_size' option was set but it is not supported on this build (pthread support is required)
-'bitrate' option was set but it is not supported on this build (pthread support is required)
+'bitrateKbps' option was set but it is not supported on this build (pthread support is required)
 burst_bits
 socket option UDPLITE_SEND_CSCOV not available
 socket option UDPLITE_RECV_CSCOV not available
@@ -29889,7 +29889,7 @@ setsockopt(IP_DROP_MEMBERSHIP)
 setsockopt(IPV6_DROP_MEMBERSHIP)
 System data size (in bytes)
 Bits to send per second
-Max length of bursts in bits (when using bitrate)
+Max length of bursts in bits (when using bitrateKbps)
 choose UDPLite head size which should be validated by checksum
 Maximum UDP packet size
 explicitly allow reusing UDP sockets
@@ -29997,7 +29997,7 @@ Malformed header
 Invalid number of channels
 COMM tag not found!
 Invalid rate flag %d
-Invalid bitrate per channel %d
+Invalid bitrateKbps per channel %d
 Mode not supported: %d Hz, %ld kb/s.
 (c) 
 ARNG
