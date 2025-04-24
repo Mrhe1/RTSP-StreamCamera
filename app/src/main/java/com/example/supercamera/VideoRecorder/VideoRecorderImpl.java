@@ -16,6 +16,7 @@ import android.view.Surface;
 
 import com.example.supercamera.MyException.MyException;
 import com.example.supercamera.VideoEncoder.EncoderListener;
+import com.example.supercamera.VideoEncoder.MediaCodecImpl;
 import com.example.supercamera.VideoEncoder.MyEncoderConfig;
 import com.example.supercamera.VideoEncoder.VideoEncoder;
 
@@ -33,7 +34,7 @@ public class VideoRecorderImpl implements VideoRecorder {
 
     //private RecorderConfig mConfig;
     private RecorderListener mListener;
-    private VideoEncoder mVideoEncoder;
+    private VideoEncoder mVideoEncoder = new MediaCodecImpl();
     private MediaMuxer mMediaMuxer;
     private int mTrackIndex = -1;
     private Surface mInputSurface;
@@ -62,10 +63,12 @@ public class VideoRecorderImpl implements VideoRecorder {
             // 初始化编码器
             synchronized (encoderLock) {
                 mVideoEncoder.configure(encoderConfig);
-                mVideoEncoder.setStreamListener(new EncoderListener() {
+                mVideoEncoder.setEncoderListener(new EncoderListener() {
                     @Override
                     public void onError(MyException e) {
-                        notifyError(e, ERROR_Codec,0,null);
+                        Executors.newSingleThreadExecutor().submit(() -> {
+                            notifyError(e,0,0,null);
+                        });
                     }
 
                     @Override

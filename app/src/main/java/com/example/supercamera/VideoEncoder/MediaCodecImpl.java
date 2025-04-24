@@ -169,7 +169,7 @@ public class MediaCodecImpl implements VideoEncoder {
     }
 
     @Override
-    public void setStreamListener(EncoderListener listener) {
+    public void setEncoderListener(EncoderListener listener) {
         synchronized (publicLock) {
             mListener = listener;
         }

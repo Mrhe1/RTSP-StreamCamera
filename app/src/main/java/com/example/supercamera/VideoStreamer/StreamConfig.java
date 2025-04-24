@@ -13,17 +13,17 @@ import android.media.MediaCodecInfo;
 import android.media.MediaFormat;
 
 public class StreamConfig {
-    private final String url;
-    private final int width;
-    private final int height;
-    private final int fps;
-    private final int bitrateKbps;
-    private final int maxReconnectAttempts;
-    private final int reconnectPeriodSeconds;
-    private final int iFrameInterval;
+    public final String url;
+    public final int width;
+    public final int height;
+    public final int fps;
+    public final int bitrateKbps;
+    public final int maxReconnectAttempts;
+    public final int reconnectPeriodSeconds;
+    public final int iFrameInterval;
     private final PushConfig pushConfig;
     private final MyEncoderConfig encoderConfig;
-    private final String encoderFormat;
+    public final String encoderFormat;
 
     private StreamConfig(Builder builder) {
         this.url = builder.url;
@@ -120,14 +120,6 @@ public class StreamConfig {
         }
 
         public StreamConfig build() {
-            // 参数校验
-            //if (url == null) throw new IllegalArgumentException("URL must be set");
-            //if (width <= 0 || height <= 0) throw new IllegalArgumentException("Invalid resolution");
-            //if (bitrateKbps <= 0) throw new IllegalArgumentException("Bitrate must be positive");
-            //if (maxReconnectAttempts < 0) throw new IllegalArgumentException("Max reconnect attempts cannot be negative");
-            //if (reconnectPeriodSeconds <= 0) throw new IllegalArgumentException("Reconnect period must be positive");
-            //if (iFrameInterval <= 0) throw new IllegalArgumentException("I-Frame interval must be positive");
-
             return new StreamConfig(this);
         }
     }

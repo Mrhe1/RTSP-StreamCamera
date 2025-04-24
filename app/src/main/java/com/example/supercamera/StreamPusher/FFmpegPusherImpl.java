@@ -129,18 +129,14 @@ public class FFmpegPusherImpl implements StreamPusher {
     }
 
     @Override
-    public void setHeader(byte[] header) {
-        mConfig.setHeader(header);
-    }
-
-    @Override
     public void setTimeStampQueue(List<PublishSubject<TimeStamp>> timeStampQueue) {
         mConfig.setTimeStampQueue(timeStampQueue);
     }
 
     // throw IllegalStateException
     @Override
-    public void start() {
+    public void start(byte[] header) {
+        mConfig.setHeader(header);
         synchronized (publicLock) {
             if (PushState.getState() != CONFIGURED) {
                 String msg = String.format("start出错，IllegalState，目前状态：%s",
@@ -330,7 +326,7 @@ public class FFmpegPusherImpl implements StreamPusher {
 
 
     @Override
-    public void setStreamListener(PushListener listener) {
+    public void setPushListener(PushListener listener) {
         synchronized (publicLock) {
             this.listener = listener;
         }
