@@ -7,6 +7,8 @@ public interface VideoEncoder {
     void start();
     // 停止推流（同步阻塞）
     void stop();
+    // 销毁模块
+    void destroy();
     // 注册回调监听器
     void setEncoderListener(EncoderListener listener);
 }

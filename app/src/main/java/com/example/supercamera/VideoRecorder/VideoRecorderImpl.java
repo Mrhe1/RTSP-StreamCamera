@@ -2,7 +2,6 @@ package com.example.supercamera.VideoRecorder;
 
 import static com.example.supercamera.MyException.MyException.ILLEGAL_STATE;
 import static com.example.supercamera.VideoRecorder.ErrorCode.ERROR_Codec;
-import static com.example.supercamera.VideoRecorder.ErrorCode.ERROR_Codec_Start;
 import static com.example.supercamera.VideoRecorder.ErrorCode.ERROR_Recorder_CONFIG;
 import static com.example.supercamera.VideoRecorder.ErrorCode.ERROR_Recorder_START;
 import static com.example.supercamera.VideoRecorder.ErrorCode.ERROR_Recorder_STOP;
@@ -31,6 +30,7 @@ public class VideoRecorderImpl implements VideoRecorder {
     private static final String TAG = "VideoRecorder";
     private final Object muxerLock = new Object();
     private final Object encoderLock = new Object();
+    private final Object errorLock = new Object();
 
     //private RecorderConfig mConfig;
     private RecorderListener mListener;
@@ -66,14 +66,14 @@ public class VideoRecorderImpl implements VideoRecorder {
                 mVideoEncoder.setEncoderListener(new EncoderListener() {
                     @Override
                     public void onError(MyException e) {
-                        Executors.newSingleThreadExecutor().submit(() -> {
-                            notifyError(e,0,0,null);
-                        });
+                        notifyError(e,0,0,null);
                     }
 
                     @Override
                     public void onStart(MediaCodec codec, MediaFormat format) {
                         setupMuxer(format);
+                        RecorderState.setState(RECORDING);
+                        if (mListener != null) mListener.onStart();
                     }
 
                     @Override
@@ -113,13 +113,13 @@ public class VideoRecorderImpl implements VideoRecorder {
         }
 
         RecorderState.setState(STARTING);
+
         try {
             mVideoEncoder.start();
         } catch (MyException e) {
-            notifyError(e, ERROR_Codec_Start,0,null);
+            RecorderState.setState(CONFIGURED);
+            throw e;
         }
-        RecorderState.setState(RECORDING);
-        if (mListener != null) mListener.onStart();
     }
 
     @Override
@@ -134,10 +134,26 @@ public class VideoRecorderImpl implements VideoRecorder {
         try {
             mVideoEncoder.stop();
             releaseMuxer();
-            releaseEncoderExecutor();
+            if (mInputSurface != null) {
+                mInputSurface.release();
+            }
             RecorderState.setState(READY);
         } catch (MyException e) {
-            notifyError(e, ERROR_Recorder_STOP,0,null);
+            if(e.getExceptionType() == ILLEGAL_STATE) {
+                RecorderState.setState(RECORDING);
+            }else {
+                notifyError(e, 0, ERROR_Recorder_STOP, null);
+            }
+        }
+    }
+
+    @Override
+    public void destroy() {
+        try {
+            mVideoEncoder.destroy();
+            releaseMuxer();
+            releaseResource();
+        } catch (Exception ignored) {
         }
     }
 
@@ -180,9 +196,12 @@ public class VideoRecorderImpl implements VideoRecorder {
         });
     }
 
-    private void releaseEncoderExecutor() {
+    private void releaseResource() {
         if(mEncoderExecutor != null) {
             mEncoderExecutor.shutdown();
+        }
+        if (mInputSurface != null) {
+            mInputSurface.release();
         }
     }
     private void releaseMuxer() {
@@ -200,14 +219,13 @@ public class VideoRecorderImpl implements VideoRecorder {
         }
     }
 
-    private void releaseCodec() {
+    private void stopCodec() {
         try {
             mVideoEncoder.stop();
         } catch (Exception ignored) {}
     }
 
     private MyException throwException(int type, int code, String message) {
-        releaseEncoderExecutor();
         return new MyException(this.getClass().getPackageName(), type, code, message);
     }
 
@@ -218,21 +236,25 @@ public class VideoRecorderImpl implements VideoRecorder {
 
         RecorderState.setState(ERROR);
 
-        switch (type) {
-            case ERROR_Codec -> releaseMuxer();
-            case ERROR_Recorder_START -> {releaseCodec(); releaseMuxer();}
-        }
-
-        releaseEncoderExecutor();
-        RecorderState.setState(READY);
-
         Executors.newSingleThreadExecutor().submit(() -> {
-            if (mListener != null) {
-                if (e != null) {
-                    e.addCode(type);
-                    mListener.onError(e);
-                } else {
-                    mListener.onError(throwException(type, code, message));
+            synchronized (errorLock) {
+                switch (code) {
+                    case ERROR_Codec -> releaseMuxer();
+                    case ERROR_Recorder_START -> {
+                        stopCodec();
+                        releaseMuxer();
+                    }
+                }
+
+                RecorderState.setState(READY);
+
+                if (mListener != null) {
+                    if (e != null) {
+                        e.addCode(code);
+                        mListener.onError(e);
+                    } else {
+                        mListener.onError(throwException(type, code, message));
+                    }
                 }
             }
         });

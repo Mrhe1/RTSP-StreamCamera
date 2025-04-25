@@ -4,7 +4,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import timber.log.Timber;
 public class StreamState {
-    private static final String TAG = "RecorderState";
+    private static final String TAG = "StreamState";
     public static final AtomicReference<StreamStateEnum> currentState =
             new AtomicReference<>(StreamStateEnum.READY);
     public enum StreamStateEnum {
@@ -38,11 +38,13 @@ public class StreamState {
         return switch (current) {
             case READY -> newState == StreamStateEnum.CONFIGURED || newState == StreamStateEnum.ERROR;
             case CONFIGURED -> newState == StreamStateEnum.STARTING || newState == StreamStateEnum.ERROR;
-            case STARTING -> newState == StreamStateEnum.ERROR || newState == StreamStateEnum.StartPUSHING;
+            case STARTING -> newState == StreamStateEnum.ERROR || newState == StreamStateEnum.StartPUSHING
+                                || newState == StreamStateEnum.READY;
             case StartPUSHING -> newState == StreamStateEnum.ERROR || newState == StreamStateEnum.STREAMING;
             case STREAMING -> newState == StreamStateEnum.ERROR || newState == StreamStateEnum.STOPPING;
             case ERROR -> newState == StreamStateEnum.STOPPING || newState == StreamStateEnum.READY;
-            case STOPPING -> newState == StreamStateEnum.READY || newState == StreamStateEnum.ERROR;
+            case STOPPING -> newState == StreamStateEnum.READY || newState == StreamStateEnum.ERROR
+                                || newState == StreamStateEnum.STREAMING;
         };
     }
 }

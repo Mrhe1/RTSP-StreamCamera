@@ -1,7 +1,9 @@
-package com.example.supercamera.StreamPusher;
+package com.example.supercamera.CameraController;
 
 import android.media.MediaCodec;
 
+import com.example.supercamera.StreamPusher.PushConfig;
+import com.example.supercamera.StreamPusher.PushListener;
 import com.example.supercamera.StreamPusher.PushStats.TimeStamp;
 
 import java.nio.ByteBuffer;
@@ -9,8 +11,7 @@ import java.util.List;
 
 import io.reactivex.rxjava3.subjects.PublishSubject;
 
-
-public interface StreamPusher {
+public interface CameraController {
     // 配置推流参数（线程安全，可重复调用）
     void configure(PushConfig config);
     // 指定报告TimeStamp的消息队列

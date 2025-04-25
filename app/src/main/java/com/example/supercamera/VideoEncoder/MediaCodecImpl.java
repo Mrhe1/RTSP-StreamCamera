@@ -22,6 +22,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import timber.log.Timber;
+
 public class MediaCodecImpl implements VideoEncoder {
     private MyEncoderConfig mConfig;
     private EncoderListener mListener;
@@ -32,10 +34,12 @@ public class MediaCodecImpl implements VideoEncoder {
     private final ExecutorService mEncoderExecutor = Executors.newSingleThreadExecutor();
     private final ExecutorService reportExecutor = Executors.newSingleThreadExecutor();
     private final AtomicBoolean onError = new AtomicBoolean(false);
+    private final String TAG = "MediaCodec";
 
     @Override
     public void configure(MyEncoderConfig config) {
         if (onError.get()) {
+            Timber.tag(TAG).e("ILLEGAL_STATE,目前状态onError");
             throw throwException(ILLEGAL_STATE,ERROR_CODEC_CONFIG,
                     "ILLEGAL_STATE,目前状态onError");
         }
@@ -106,6 +110,7 @@ public class MediaCodecImpl implements VideoEncoder {
                 });
 
             } catch (Exception e) {
+                Timber.tag(TAG).e(e,"codec配置失败");
                 notifyError(RUNTIME_ERROR, ERROR_CODEC_CONFIG,
                         "配置失败: " + e.getMessage());
             }
@@ -115,6 +120,7 @@ public class MediaCodecImpl implements VideoEncoder {
     @Override
     public void start() {
         if (onError.get()) {
+            Timber.tag(TAG).e("ILLEGAL_STATE,目前状态onError");
             throw throwException(ILLEGAL_STATE,ERROR_CODEC_START,
                     "ILLEGAL_STATE,目前状态onError");
         }
@@ -126,8 +132,9 @@ public class MediaCodecImpl implements VideoEncoder {
                         mMediaCodec.start();
                     }
                 } catch (IllegalStateException e) {
+                    Timber.tag(TAG).e(e, "codec启动失败");
                     notifyError(RUNTIME_ERROR, ERROR_CODEC_START,
-                            "启动失败: " + e.getMessage());
+                            "codec启动失败: " + e.getMessage());
                 }
             });
         }
@@ -136,6 +143,7 @@ public class MediaCodecImpl implements VideoEncoder {
     @Override
     public void stop() {
         if (onError.get()) {
+            Timber.tag(TAG).e( "ILLEGAL_STATE,目前状态onError");
             throw throwException(ILLEGAL_STATE,ERROR_CODEC_STOP,
                     "ILLEGAL_STATE,目前状态onError");
         }
@@ -155,15 +163,40 @@ public class MediaCodecImpl implements VideoEncoder {
                     mInputSurface.release();
                 }
             } catch (Exception e) {
-                notifyError(RUNTIME_ERROR, ERROR_CODEC_STOP,
-                        "停止失败: " + e.getMessage());
+                Timber.tag(TAG).e(e, "停止codec出错");
             }
+        }
+    }
 
-            if (mEncoderExecutor != null) {
-                mEncoderExecutor.shutdown();
-            }
-            if (reportExecutor != null) {
-                reportExecutor.shutdown();
+    @Override
+    public void destroy() {
+        synchronized (publicLock) {
+            try {
+                // 发送编码结束信号前等待所有buffer处理
+                if (mMediaCodec != null) {
+                    mMediaCodec.signalEndOfInputStream();
+                    Thread.sleep(50); // 等待50ms确保回调完成
+                }
+                if (mMediaCodec != null) {
+                    mMediaCodec.stop();
+                    mMediaCodec.release();
+                }
+                if (mInputSurface != null) {
+                    mInputSurface.release();
+                }
+                if (mEncoderExecutor != null) {
+                    mEncoderExecutor.shutdown();
+                }
+                if (reportExecutor != null) {
+                    reportExecutor.shutdown();
+                }
+                if (mEncoderExecutor != null) {
+                    mEncoderExecutor.shutdown();
+                }
+                if (reportExecutor != null) {
+                    reportExecutor.shutdown();
+                }
+            } catch (Exception ignored) {
             }
         }
     }
@@ -192,19 +225,19 @@ public class MediaCodecImpl implements VideoEncoder {
         if (onError.get()) return;
         onError.set(true);
 
-        synchronized (onErrorLock) {
-            switch (code) {
-                case ERROR_CODEC -> errorStop_TypeA();
-                case ERROR_CODEC_START -> errorStop_TypeB();
-            }
+        Executors.newSingleThreadExecutor().submit(() -> {
+            synchronized (onErrorLock) {
+                switch (code) {
+                    case ERROR_CODEC -> errorStop_TypeA();
+                    case ERROR_CODEC_START, ERROR_CODEC_CONFIG -> errorStop_TypeB();
+                }
 
-            Executors.newSingleThreadExecutor().submit(() -> {
                 if (mListener != null) {
                     mListener.onError(new MyException(this.getClass().getPackageName(),
                             type, code, message));
                 }
-            });
-        }
+            }
+        });
     }
 
     private void errorStop_TypeA() {

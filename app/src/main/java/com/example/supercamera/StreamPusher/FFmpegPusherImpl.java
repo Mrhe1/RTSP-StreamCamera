@@ -194,16 +194,29 @@ public class FFmpegPusherImpl implements StreamPusher {
                 // 停止ffmpeg
                 stopFFmpeg();
 
-                if (reportExecutor != null) {
-                    reportExecutor.shutdown();
-                }
-
                 PushState.setState(READY);
             } catch (Exception e) {
                 Timber.tag(TAG).e(e, "停止FFmpeg出错");
-                notifyError(RUNTIME_ERROR, ERROR_FFmpeg_STOP, e.getMessage());
             }
         }
+    }
+
+    @Override
+    public void destroy() {
+        try {
+            if (statistics != null) {
+                // 停止统计
+                statistics.stopPushStatistics();
+            }
+            //销毁重连
+            disposeReconnect();
+            // 停止ffmpeg
+            stopFFmpeg();
+
+            if (reportExecutor != null) {
+                reportExecutor.shutdown();
+            }
+        } catch (Exception ignored) {}
     }
 
     @Override
@@ -637,32 +650,33 @@ public class FFmpegPusherImpl implements StreamPusher {
     }
 
     private void notifyError(int type,int code, String message) {
-        synchronized (onErrorLock) {
-            if (PushState.getState() == ERROR &&
-                    PushState.getState() == READY) return;
+        if (PushState.getState() == ERROR &&
+                PushState.getState() == READY) return;
 
-            PushState.setState(ERROR);
+        PushState.setState(ERROR);
 
-            switch (code) {
-                case ERROR_FFmpeg_START, ERROR_FFmpeg -> errorStop_TypeA();
-                case ERROR_FFmpeg_Reconnect, ERROR_FFmpeg_ReconnectFail
-                        -> errorStop_TypeB();
-            }
+        Executors.newSingleThreadExecutor().submit(() -> {
+            synchronized (onErrorLock) {
+                switch (code) {
+                    case ERROR_FFmpeg_START, ERROR_FFmpeg -> errorStop_TypeA();
+                    case ERROR_FFmpeg_Reconnect, ERROR_FFmpeg_ReconnectFail -> errorStop_TypeB();
+                }
 
-            PushState.setState(READY);
+                PushState.setState(READY);
 
-            MyException e = new MyException(this.getClass().getPackageName(),
-                    type, code, message);
+                MyException e = new MyException(this.getClass().getPackageName(),
+                        type, code, message);
 
-            if(listener != null) {
-                if(code == ERROR_FFmpeg_ReconnectFail ||
-                code == ERROR_FFmpeg_Reconnect) {
-                    listener.onReconnectFail(e);
-                }else {
-                    listener.onError(e);
+                if (listener != null) {
+                    if (code == ERROR_FFmpeg_ReconnectFail ||
+                            code == ERROR_FFmpeg_Reconnect) {
+                        listener.onReconnectFail(e);
+                    } else {
+                        listener.onError(e);
+                    }
                 }
             }
-        }
+        });
     }
 
     private void errorStop_TypeA() {

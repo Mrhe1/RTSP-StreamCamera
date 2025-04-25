@@ -3,6 +3,10 @@ package com.example.supercamera.VideoStreamer;
 import static com.example.supercamera.MyException.MyException.ILLEGAL_ARGUMENT;
 import static com.example.supercamera.MyException.MyException.ILLEGAL_STATE;
 import static com.example.supercamera.StreamPusher.PushStats.TimeStamp.TimeStampStyle.Encoded;
+import static com.example.supercamera.VideoStreamer.ErrorCode.ERROR_Codec;
+import static com.example.supercamera.VideoStreamer.ErrorCode.ERROR_Pusher;
+import static com.example.supercamera.VideoStreamer.ErrorCode.ERROR_Pusher_ReconnectFail;
+import static com.example.supercamera.VideoStreamer.ErrorCode.ERROR_Pusher_START;
 import static com.example.supercamera.VideoStreamer.ErrorCode.ERROR_Stream_CONFIG;
 import static com.example.supercamera.VideoStreamer.ErrorCode.ERROR_Stream_START;
 import static com.example.supercamera.VideoStreamer.ErrorCode.ERROR_Stream_STOP;
@@ -60,6 +64,7 @@ public class VideoStreamerImpl implements VideoStreamer {
                 Timber.tag(TAG).e(msg);
                 throw throwException(ILLEGAL_STATE, ERROR_Stream_CONFIG, msg);
             }
+
             mConfig = config;
             checkParams(mConfig);
 
@@ -67,6 +72,7 @@ public class VideoStreamerImpl implements VideoStreamer {
             mPusher.configure(mConfig.getPushConfig());
 
             setListener();
+            StreamState.setState(CONFIGURED);
         }
     }
 
@@ -91,7 +97,14 @@ public class VideoStreamerImpl implements VideoStreamer {
                         "CaptureTimeStampQueue，未设置");
             }
 
-            mVideoEncoder.start();
+            StreamState.setState(STARTING);
+            try {
+                mVideoEncoder.start();
+            } catch (MyException e) {
+                Timber.tag(TAG).e(e,"start失败:%s", e.getMessage());
+                StreamState.setState(READY);
+                throw e;
+            }
         }
     }
 
@@ -104,15 +117,28 @@ public class VideoStreamerImpl implements VideoStreamer {
                 Timber.tag(TAG).e(msg);
                 throw throwException(ILLEGAL_STATE, ERROR_Stream_STOP, msg);
             }
+
+            StreamState.setState(STOPPING);
+            try {
+                mPusher.stop();
+                mVideoEncoder.stop();
+                StreamState.setState(READY);
+            } catch (MyException e) {
+                Timber.tag(TAG).e(e,"stop失败:%s", e.getMessage());
+                if(e.getExceptionType() == ILLEGAL_STATE) {
+                    StreamState.setState(STREAMING);
+                }else {
+                    notifyError(e, 0, ERROR_Stream_STOP, null);
+                }
+            }
         }
-        try {
-            mPusher.stop();
-            mVideoEncoder.stop();
-        } catch (MyException e) {
-            throw e;
-        }finally {
-            cleanResource();
-        }
+    }
+
+    @Override
+    public void destroy() {
+        mPusher.destroy();
+        mVideoEncoder.destroy();
+        cleanResource();
     }
 
 
@@ -127,7 +153,7 @@ public class VideoStreamerImpl implements VideoStreamer {
         mVideoEncoder.setEncoderListener(new EncoderListener() {
             @Override
             public void onError(MyException e) {
-                notifyError(e,0,0,null);
+                notifyError(e,0,ERROR_Codec,null);
             }
 
             @Override
@@ -176,7 +202,8 @@ public class VideoStreamerImpl implements VideoStreamer {
         mPusher.setPushListener(new PushListener() {
             @Override
             public void onError(MyException e) {
-                notifyError(e,0,0,null);
+                Timber.tag(TAG).e(e,"pusher出错:%s", e.getMessage());
+                notifyError(e,0,ERROR_Pusher,null);
             }
 
             @Override
@@ -192,12 +219,12 @@ public class VideoStreamerImpl implements VideoStreamer {
 
             @Override
             public void onReconnect(boolean ifSuccess, int reconnectAttempts) {
-
+                if(mListener != null) mListener.onReconnect(ifSuccess, reconnectAttempts);
             }
 
             @Override
             public void onReconnectFail(MyException e) {
-                notifyError(e,0,0,null);
+                notifyError(e,0,ERROR_Pusher_ReconnectFail,null);
             }
         });
     }
@@ -216,7 +243,7 @@ public class VideoStreamerImpl implements VideoStreamer {
             mPusher.setTimeStampQueue(queue);
             mPusher.start(configData);
         } catch (MyException e) {
-            notifyError(e,0,0,null);
+            notifyError(e,0,ERROR_Pusher_START,null);
         }
     }
 
@@ -234,7 +261,9 @@ public class VideoStreamerImpl implements VideoStreamer {
     }
 
     private void cleanResource() {
-
+        if(report != null) {
+            report.shutdown();
+        }
     }
 
     private void checkParams(StreamConfig config) {
@@ -266,6 +295,28 @@ public class VideoStreamerImpl implements VideoStreamer {
         StreamState.setState(ERROR);
 
         Executors.newSingleThreadExecutor().submit(() -> {
+            switch (code) {
+                case ERROR_Pusher_START,ERROR_Pusher,ERROR_Pusher_ReconnectFail -> {
+                    try {
+                        mVideoEncoder.stop();
+                    } catch (Exception ignored) {}
+                }
+                case ERROR_Codec -> {
+                    try {
+                    mPusher.stop();
+                    } catch (Exception ignored) {}
+                }
+            }
+
+            StreamState.setState(READY);
+            if(mListener != null) {
+                if(e != null) {
+                    e.addCode(code);
+                    mListener.onError(e);
+                }else {
+                    mListener.onError(throwException(type, code, message));
+                }
+            }
         });
     }
 }

@@ -10,6 +10,7 @@ public class ErrorCode {
     public static final int ERROR_Pusher = 0x1004;
     public static final int ERROR_Codec = 0x1005;
     public static final int ERROR_Pusher_ReconnectFail = 0x1006;  // 重连失败
+    public static final int ERROR_Pusher_START = 0x1007;
     public static final Map<Integer, String> errorCodeMap = new HashMap<>();
 
     static {
@@ -19,5 +20,6 @@ public class ErrorCode {
         errorCodeMap.put(0x1004, "ERROR_Pusher");
         errorCodeMap.put(0x1005, "ERROR_Codec");
         errorCodeMap.put(0x1006, "ERROR_Pusher_ReconnectFail");
+        errorCodeMap.put(0x1007, "ERROR_Pusher_START");
     }
 }

@@ -1,14 +1,11 @@
-package com.example.supercamera.VideoStreamer;
-
-import android.view.Surface;
+package com.example.supercamera.CameraController;
 
 import com.example.supercamera.MyException.MyException;
 import com.example.supercamera.StreamPusher.PushStats.PushStatsInfo;
 
-public interface StreamListener {
+public interface CameraListener {
     void onError(MyException e);
     void onStatistics(PushStatsInfo stats);
-    void onSurfaceAvailable(Surface surface);
     void onStart();
-    void onReconnect(boolean ifSuccess, int reconnectAttempts);
+    void onReconnectFail(MyException e);
 }
