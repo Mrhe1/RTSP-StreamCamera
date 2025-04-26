@@ -1,54 +1,50 @@
 package com.example.supercamera.CameraController;
 
-import com.example.supercamera.StreamPusher.PushState;
-
 import java.util.concurrent.atomic.AtomicReference;
 
 import timber.log.Timber;
 
 public class CameraState {
-    private static final String TAG = "PushState";
-    public static final AtomicReference<com.example.supercamera.StreamPusher.PushState.PushStateEnum> currentState =
-            new AtomicReference<>(com.example.supercamera.StreamPusher.PushState.PushStateEnum.READY);
-    public enum PushStateEnum {
+    private static final String TAG = "CameraState";
+    public static final AtomicReference<CameraStateEnum> currentState =
+            new AtomicReference<>(CameraStateEnum.READY);
+
+    public enum CameraStateEnum {
         READY,
-        CONFIGURED,
+        CONFIGURING,
+        OPENING,
+        PREVIEWING,
         ERROR,
-        RECONNECTING,
-        STARTING,
-        PUSHING,
-        STOPPING
+        CLOSING
     }
 
-    // 处理工作状态转换
-    public static boolean setState(com.example.supercamera.StreamPusher.PushState.PushStateEnum newState) {
-        // 状态校验
+    public static boolean setState(CameraStateEnum newState) {
         if (!isValidTransition(newState)) {
-            Timber.tag(TAG).w("非法状态转换: %s → %s",
+            Timber.tag(TAG).w("Invalid state transition: %s → %s",
                     currentState.get(), newState);
             return false;
         }
         return currentState.compareAndSet(currentState.get(), newState);
     }
 
-    public static com.example.supercamera.StreamPusher.PushState.PushStateEnum getState() {
+    public static CameraStateEnum getState() {
         return currentState.get();
     }
 
-    private static boolean isValidTransition(com.example.supercamera.StreamPusher.PushState.PushStateEnum newState) {
-        // 实现状态转换规则校验
-        com.example.supercamera.StreamPusher.PushState.PushStateEnum current = currentState.get();
+    private static boolean isValidTransition(CameraStateEnum newState) {
+        CameraStateEnum current = currentState.get();
         return switch (current) {
-            case READY -> newState == com.example.supercamera.StreamPusher.PushState.PushStateEnum.CONFIGURED || newState == com.example.supercamera.StreamPusher.PushState.PushStateEnum.ERROR;
-            case STARTING -> newState == com.example.supercamera.StreamPusher.PushState.PushStateEnum.ERROR || newState == com.example.supercamera.StreamPusher.PushState.PushStateEnum.PUSHING;
-            case CONFIGURED -> newState == com.example.supercamera.StreamPusher.PushState.PushStateEnum.STARTING || newState == com.example.supercamera.StreamPusher.PushState.PushStateEnum.ERROR;
-            case PUSHING -> newState == com.example.supercamera.StreamPusher.PushState.PushStateEnum.ERROR || newState == com.example.supercamera.StreamPusher.PushState.PushStateEnum.STOPPING
-                    || newState == com.example.supercamera.StreamPusher.PushState.PushStateEnum.RECONNECTING;
-            case RECONNECTING -> newState == com.example.supercamera.StreamPusher.PushState.PushStateEnum.ERROR || newState == com.example.supercamera.StreamPusher.PushState.PushStateEnum.PUSHING
-                    || newState == com.example.supercamera.StreamPusher.PushState.PushStateEnum.STOPPING;
-            case ERROR -> newState == com.example.supercamera.StreamPusher.PushState.PushStateEnum.STOPPING || newState == com.example.supercamera.StreamPusher.PushState.PushStateEnum.READY;
-            case STOPPING -> newState == com.example.supercamera.StreamPusher.PushState.PushStateEnum.READY || newState == com.example.supercamera.StreamPusher.PushState.PushStateEnum.ERROR;
-            default -> false;
+            case READY -> newState == CameraStateEnum.CONFIGURING;
+            case CONFIGURING -> newState == CameraStateEnum.OPENING ||
+                    newState == CameraStateEnum.ERROR;
+            case OPENING -> newState == CameraStateEnum.PREVIEWING ||
+                    newState == CameraStateEnum.ERROR;
+            case PREVIEWING -> newState == CameraStateEnum.CLOSING ||
+                    newState == CameraStateEnum.ERROR;
+            case ERROR -> newState == CameraStateEnum.CLOSING ||
+                    newState == CameraStateEnum.READY;
+            case CLOSING -> newState == CameraStateEnum.READY ||
+                    newState == CameraStateEnum.ERROR;
         };
     }
 }

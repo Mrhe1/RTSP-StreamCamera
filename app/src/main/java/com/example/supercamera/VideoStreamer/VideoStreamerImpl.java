@@ -50,6 +50,7 @@ public class VideoStreamerImpl implements VideoStreamer {
     // 外部调用锁
     private final Object publicLock = new Object();
     private final Object dimensionLock = new Object();
+    private final Object errorLock = new Object();
     private String TAG = "VideoStreamer";
     PublishSubject<TimeStamp> CaptureTimeStampQueue = null;
     PublishSubject<TimeStamp> EncodedTimeStampQueue = PublishSubject.create();
@@ -295,26 +296,30 @@ public class VideoStreamerImpl implements VideoStreamer {
         StreamState.setState(ERROR);
 
         Executors.newSingleThreadExecutor().submit(() -> {
-            switch (code) {
-                case ERROR_Pusher_START,ERROR_Pusher,ERROR_Pusher_ReconnectFail -> {
-                    try {
-                        mVideoEncoder.stop();
-                    } catch (Exception ignored) {}
+            synchronized (errorLock) {
+                switch (code) {
+                    case ERROR_Pusher_START, ERROR_Pusher, ERROR_Pusher_ReconnectFail -> {
+                        try {
+                            mVideoEncoder.stop();
+                        } catch (Exception ignored) {
+                        }
+                    }
+                    case ERROR_Codec -> {
+                        try {
+                            mPusher.stop();
+                        } catch (Exception ignored) {
+                        }
+                    }
                 }
-                case ERROR_Codec -> {
-                    try {
-                    mPusher.stop();
-                    } catch (Exception ignored) {}
-                }
-            }
 
-            StreamState.setState(READY);
-            if(mListener != null) {
-                if(e != null) {
-                    e.addCode(code);
-                    mListener.onError(e);
-                }else {
-                    mListener.onError(throwException(type, code, message));
+                StreamState.setState(READY);
+                if (mListener != null) {
+                    if (e != null) {
+                        e.addCode(code);
+                        mListener.onError(e);
+                    } else {
+                        mListener.onError(throwException(type, code, message));
+                    }
                 }
             }
         });

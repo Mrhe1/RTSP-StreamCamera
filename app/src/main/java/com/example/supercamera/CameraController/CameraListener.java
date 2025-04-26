@@ -1,11 +1,14 @@
 package com.example.supercamera.CameraController;
 
+import android.util.Size;
+import android.view.Surface;
+
 import com.example.supercamera.MyException.MyException;
-import com.example.supercamera.StreamPusher.PushStats.PushStatsInfo;
 
 public interface CameraListener {
     void onError(MyException e);
-    void onStatistics(PushStatsInfo stats);
-    void onStart();
-    void onReconnectFail(MyException e);
+    void onCameraOpened(Size previewSize, Size recordSize,int fps, int stabMode);
+    void onPreviewStarted();
+    void onSurfaceAvailable(Surface surface);
+    void onCameraClosed();
 }

@@ -232,6 +232,7 @@ public class MediaCodecImpl implements VideoEncoder {
                     case ERROR_CODEC_START, ERROR_CODEC_CONFIG -> errorStop_TypeB();
                 }
 
+                onError.set(false);
                 if (mListener != null) {
                     mListener.onError(new MyException(this.getClass().getPackageName(),
                             type, code, message));
