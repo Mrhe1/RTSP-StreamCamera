@@ -7,6 +7,8 @@ public interface VideoWorkflow {
     void start();
     // 停止推流（同步阻塞）
     void stop();
+    // 销毁组件
+    void destroy();
     // 注册回调监听器
     void setStreamListener(WorkflowListener listener);
 }

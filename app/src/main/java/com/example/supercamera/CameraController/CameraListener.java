@@ -8,7 +8,4 @@ import com.example.supercamera.MyException.MyException;
 public interface CameraListener {
     void onError(MyException e);
     void onCameraOpened(Size previewSize, Size recordSize,int fps, int stabMode);
-    void onPreviewStarted();
-    void onSurfaceAvailable(Surface surface);
-    void onCameraClosed();
 }

@@ -16,6 +16,7 @@ import static com.example.supercamera.CameraController.CameraState.CameraStateEn
 import static com.example.supercamera.CameraController.CameraState.CameraStateEnum.READY;
 import static com.example.supercamera.CameraController.ErrorCode.ERROR_CAMERA_Configure;
 import static com.example.supercamera.CameraController.ErrorCode.ERROR_CAMERA_DEVICE;
+import static com.example.supercamera.CameraController.ErrorCode.ERROR_CAMERA_SERVICE;
 import static com.example.supercamera.CameraController.ErrorCode.ERROR_OpenCamera;
 import static com.example.supercamera.CameraController.ErrorCode.ERROR_Param_Illegal;
 import static com.example.supercamera.CameraController.ErrorCode.ERROR_StopCamera;
@@ -62,16 +63,16 @@ public class CameraImpl implements CameraController {
     private CameraListener mListener;
     private Handler cameraHandler;
     private CameraDevice cameraDevice;
-    private String TAG = "CameraController";
+    private final String TAG = "CameraController";
     private String cameraId = null;
     private Range<Integer> fpsRange;
     private int finalStabMode;
     private final Context context;
-    private Object publicLock = new Object();
-    private Object errorLock = new Object();
+    private final Object publicLock = new Object();
+    private final Object errorLock = new Object();
     private CameraCaptureSession cameraCaptureSession;
-    private ExecutorService reportExecutor = Executors.newSingleThreadExecutor();
-    private PublishSubject<TimeStamp> reportQueue = PublishSubject.create();
+    private final ExecutorService reportExecutor = Executors.newSingleThreadExecutor();
+    private final PublishSubject<TimeStamp> reportQueue = PublishSubject.create();
     public CameraImpl(Context context) {
         this.context = context;
     }
@@ -97,7 +98,9 @@ public class CameraImpl implements CameraController {
             }
 
             // 检查分辨率
-            checkResolutionSupport(config.previewSize, config.recordSize);
+            if(!checkResolutionSupport(config.previewSize, config.recordSize)) {
+                throwException(RUNTIME_ERROR, ERROR_CAMERA_Configure, "分辨率不支持");
+            }
             // 获取fpsRange
             fpsRange = getFpsRange(config.fps);
             // 获取防抖模式
@@ -127,9 +130,7 @@ public class CameraImpl implements CameraController {
                     @Override
                     public void onOpened(@NonNull CameraDevice device) {
                         cameraDevice = device;
-                        configureSession(surfaces,
-                                mConfig.previewSize, mConfig.recordSize,
-                                fpsRange, finalStabMode);
+                        configureSession(surfaces, fpsRange, finalStabMode);
                     }
 
                     @Override
@@ -144,7 +145,7 @@ public class CameraImpl implements CameraController {
                         device.close();
                         cameraDevice = null;
                         Timber.tag(TAG).e(msg);
-                        notifyError(RUNTIME_ERROR, ERROR_CAMERA_SERVICE, msg);
+                        notifyError(RUNTIME_ERROR, ERROR_OpenCamera, msg);
                     }
                 }, cameraHandler);
             } catch (CameraAccessException | SecurityException e) {
@@ -161,13 +162,37 @@ public class CameraImpl implements CameraController {
                 Timber.tag(TAG).e(msg);
                 throw throwException(ILLEGAL_STATE, ERROR_StopCamera, msg);
             }
+
+            try {
+                // 释放资源
+                if (cameraCaptureSession != null) {
+                    cameraCaptureSession.abortCaptures();
+                    cameraCaptureSession.close();
+                    cameraCaptureSession = null;
+                }
+
+                if (cameraDevice != null) {
+                    cameraDevice.close();
+                    cameraDevice = null;
+                }
+
+                if (cameraHandler != null) {
+                    cameraHandler.getLooper().quitSafely();
+                    cameraHandler = null;
+                }
+            } catch (Exception e) {
+                Timber.tag(TAG).e("摄像头关闭失败:%s", e.getMessage());
+            }
         }
     }
 
     @Override
     public void destroy() {
         synchronized (publicLock) {
-
+            try{
+                stop();
+                cleanRecourse();
+            } catch (Exception ignored) {}
         }
     }
 
@@ -306,14 +331,8 @@ public class CameraImpl implements CameraController {
             boolean oisSupported = Arrays.stream(oisModes).anyMatch(
                     m -> m == CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON);
 
-            boolean oisON = false;
-            boolean eisON = false;
-            if (eisSupported && (stabMode == Stab_HYBRID || stabMode == Stab_EIS_ONLY)) {
-                eisON = true;
-            }
-            if (oisSupported && (stabMode == Stab_HYBRID || stabMode == Stab_OIS_ONLY)) {
-                oisON = true;
-            }
+            boolean oisON = oisSupported && (stabMode == Stab_HYBRID || stabMode == Stab_OIS_ONLY);
+            boolean eisON = eisSupported && (stabMode == Stab_HYBRID || stabMode == Stab_EIS_ONLY);
 
             if(eisON && oisON) {
                 return Stab_HYBRID;
@@ -332,7 +351,7 @@ public class CameraImpl implements CameraController {
     }
 
     // 配置摄像头会话
-    private void configureSession(List<Surface> surfaces,Size previewSize, Size recordSize,
+    private void configureSession(List<Surface> surfaces,
                                   Range<Integer> fpsRange, int stabMode) {
         try {
             // 创建CaptureRequest构建器
@@ -376,7 +395,7 @@ public class CameraImpl implements CameraController {
                                     }
                                 }, cameraHandler);
                     } catch (CameraAccessException e) {
-                        notifyError(RUNTIME_ERROR, ERROR_OpenCamera, e.getMessage());
+                        notifyError(RUNTIME_ERROR, ERROR_CAMERA_SERVICE, e.getMessage());
                     }
                 }
 
@@ -414,6 +433,14 @@ public class CameraImpl implements CameraController {
         }
     }
 
+    private void cleanRecourse() {
+        try {
+            if (reportExecutor != null) {
+                reportExecutor.shutdown();
+            }
+        } catch (Exception ignored) {}
+    }
+
     private void notifyError(int type,int code, String message) {
         if (CameraState.getState() != CONFIGURING &&
                 CameraState.getState() != OPENING &&
@@ -424,9 +451,55 @@ public class CameraImpl implements CameraController {
 
         Executors.newSingleThreadExecutor().submit(() -> {
             synchronized (errorLock) {
+                switch (code) {
+                    case ERROR_CAMERA_SERVICE -> stopCamera();
+                    case ERROR_OpenCamera -> stopOnlyDevice();
+                }
 
+                if(mListener != null) {
+                    mListener.onError(throwException(type,code,message));
+                }
             }
         });
+    }
+
+    private void stopCamera() {
+        try {
+            // 释放资源
+            if (cameraCaptureSession != null) {
+                cameraCaptureSession.abortCaptures();
+                cameraCaptureSession.close();
+                cameraCaptureSession = null;
+            }
+
+            if (cameraDevice != null) {
+                cameraDevice.close();
+                cameraDevice = null;
+            }
+
+            if (cameraHandler != null) {
+                cameraHandler.getLooper().quitSafely();
+                cameraHandler = null;
+            }
+        } catch (Exception e) {
+            Timber.tag(TAG).e("摄像头关闭失败:%s", e.getMessage());
+        }
+    }
+
+    private void stopOnlyDevice() {
+        try {
+            if (cameraDevice != null) {
+                cameraDevice.close();
+                cameraDevice = null;
+            }
+
+            if (cameraHandler != null) {
+                cameraHandler.getLooper().quitSafely();
+                cameraHandler = null;
+            }
+        } catch (Exception e) {
+            Timber.tag(TAG).e("摄像头关闭失败:%s", e.getMessage());
+        }
     }
 
     private MyException throwException(int type, int code, String message) {

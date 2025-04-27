@@ -31,7 +31,7 @@ public class RecorderConfig {
         private int fps = 30;
         private int iFrameInterval = 1;
         private String mimeType = MediaFormat.MIMETYPE_VIDEO_AVC;
-        private int profile = MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline;
+        private int profile = MediaCodecInfo.CodecProfileLevel.AVCProfileHigh;
         private int bitrate = 4_000; // 4mbps
 
         public Builder(int width, int height) {

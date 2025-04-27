@@ -172,24 +172,7 @@ public class MediaCodecImpl implements VideoEncoder {
     public void destroy() {
         synchronized (publicLock) {
             try {
-                // 发送编码结束信号前等待所有buffer处理
-                if (mMediaCodec != null) {
-                    mMediaCodec.signalEndOfInputStream();
-                    Thread.sleep(50); // 等待50ms确保回调完成
-                }
-                if (mMediaCodec != null) {
-                    mMediaCodec.stop();
-                    mMediaCodec.release();
-                }
-                if (mInputSurface != null) {
-                    mInputSurface.release();
-                }
-                if (mEncoderExecutor != null) {
-                    mEncoderExecutor.shutdown();
-                }
-                if (reportExecutor != null) {
-                    reportExecutor.shutdown();
-                }
+                stop();
                 if (mEncoderExecutor != null) {
                     mEncoderExecutor.shutdown();
                 }

@@ -29,6 +29,11 @@ public class VideoWorkflowImpl implements VideoWorkflow {
 
     }
 
+    @Override
+    public void destroy() {
+
+    }
+
 
     @Override
     public void setStreamListener(WorkflowListener listener) {

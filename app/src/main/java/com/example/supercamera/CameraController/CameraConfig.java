@@ -39,7 +39,7 @@ public class CameraConfig {
             this.recordSize = recordSize;
         }
 
-        public Builder setFpsRange(int fps) {
+        public Builder setFps(int fps) {
             this.fps = fps;
             return this;
         }
