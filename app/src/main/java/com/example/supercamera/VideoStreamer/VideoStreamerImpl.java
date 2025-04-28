@@ -42,16 +42,16 @@ import io.reactivex.rxjava3.subjects.PublishSubject;
 import timber.log.Timber;
 
 public class VideoStreamerImpl implements VideoStreamer {
-    private VideoEncoder mVideoEncoder = new MediaCodecImpl();
-    private StreamPusher mPusher = new FFmpegPusherImpl();
+    private final VideoEncoder mVideoEncoder = new MediaCodecImpl();
+    private final StreamPusher mPusher = new FFmpegPusherImpl();
     private StreamConfig mConfig;
     private StreamListener mListener;
-    private ExecutorService report = Executors.newSingleThreadExecutor();
+    private final ExecutorService report = Executors.newSingleThreadExecutor();
     // 外部调用锁
     private final Object publicLock = new Object();
     private final Object dimensionLock = new Object();
     private final Object errorLock = new Object();
-    private String TAG = "VideoStreamer";
+    private final String TAG = "VideoStreamer";
     PublishSubject<TimeStamp> CaptureTimeStampQueue = null;
     PublishSubject<TimeStamp> EncodedTimeStampQueue = PublishSubject.create();
     private long lastPresentationTimeUs = 0;
@@ -72,7 +72,7 @@ public class VideoStreamerImpl implements VideoStreamer {
             mVideoEncoder.configure(mConfig.getEncoderConfig());
             mPusher.configure(mConfig.getPushConfig());
 
-            setListener();
+            setListeners();
             StreamState.setState(CONFIGURED);
         }
     }
@@ -150,7 +150,7 @@ public class VideoStreamerImpl implements VideoStreamer {
         }
     }
 
-    private void setListener() {
+    private void setListeners() {
         mVideoEncoder.setEncoderListener(new EncoderListener() {
             @Override
             public void onError(MyException e) {
@@ -162,7 +162,9 @@ public class VideoStreamerImpl implements VideoStreamer {
 
             @Override
             public void onSurfaceAvailable(Surface surface) {
-                if(mListener != null) mListener.onSurfaceAvailable(surface);
+                report.submit(() -> {
+                    if (mListener != null) mListener.onSurfaceAvailable(surface);
+                });
             }
 
             @Override
@@ -176,7 +178,6 @@ public class VideoStreamerImpl implements VideoStreamer {
                     ByteBuffer outputBuffer = codec.getOutputBuffer(index);
                     if (outputBuffer == null) {
                         Timber.tag(TAG).w("获取输出缓冲区失败");
-                        codec.releaseOutputBuffer(index, false);
                         return;
                     }
 

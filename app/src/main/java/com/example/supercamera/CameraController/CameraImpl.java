@@ -73,6 +73,7 @@ public class CameraImpl implements CameraController {
     private CameraCaptureSession cameraCaptureSession;
     private final ExecutorService reportExecutor = Executors.newSingleThreadExecutor();
     private final PublishSubject<TimeStamp> reportQueue = PublishSubject.create();
+
     public CameraImpl(Context context) {
         this.context = context;
     }
@@ -110,48 +111,50 @@ public class CameraImpl implements CameraController {
 
     @Override
     public void openCamera(List<Surface> surfaces) {
-        synchronized (publicLock) {
-            if (CameraState.getState() != CONFIGURING) {
-                String msg = String.format("openCamera failed, current state: %s", StreamState.getState());
-                Timber.tag(TAG).e(msg);
-                throw throwException(ILLEGAL_STATE, ERROR_OpenCamera, msg);
-            }
-            CameraState.setState(OPENING);
-
-            // 初始化摄像头线程
-            HandlerThread cameraThread = new HandlerThread("CameraBackground");
-            cameraThread.start();
-            cameraHandler = new Handler(cameraThread.getLooper());
-
-            try{
-                CameraManager manager = getSystemService(context, CameraManager.class);
-                // 打开摄像头
-                manager.openCamera(cameraId, new CameraDevice.StateCallback() {
-                    @Override
-                    public void onOpened(@NonNull CameraDevice device) {
-                        cameraDevice = device;
-                        configureSession(surfaces, fpsRange, finalStabMode);
-                    }
-
-                    @Override
-                    public void onDisconnected(@NonNull CameraDevice device) {
-                        device.close();
-                        cameraDevice = null;
-                    }
-
-                    @Override
-                    public void onError(@NonNull CameraDevice device, int error) {
-                        String msg = String.format("摄像头出错，错误码：%d",error);
-                        device.close();
-                        cameraDevice = null;
-                        Timber.tag(TAG).e(msg);
-                        notifyError(RUNTIME_ERROR, ERROR_OpenCamera, msg);
-                    }
-                }, cameraHandler);
-            } catch (CameraAccessException | SecurityException e) {
-                notifyError(RUNTIME_ERROR, ERROR_OpenCamera, e.getMessage());
-            }
+        if (CameraState.getState() != CONFIGURING) {
+            String msg = String.format("openCamera failed, current state: %s", StreamState.getState());
+            Timber.tag(TAG).e(msg);
+            throw throwException(ILLEGAL_STATE, ERROR_OpenCamera, msg);
         }
+        CameraState.setState(OPENING);
+
+        Executors.newSingleThreadExecutor().submit(() -> {
+            synchronized (publicLock) {
+                // 初始化摄像头线程
+                HandlerThread cameraThread = new HandlerThread("CameraBackground");
+                cameraThread.start();
+                cameraHandler = new Handler(cameraThread.getLooper());
+
+                try {
+                    CameraManager manager = getSystemService(context, CameraManager.class);
+                    // 打开摄像头
+                    manager.openCamera(cameraId, new CameraDevice.StateCallback() {
+                        @Override
+                        public void onOpened(@NonNull CameraDevice device) {
+                            cameraDevice = device;
+                            configureSession(surfaces, fpsRange, finalStabMode);
+                        }
+
+                        @Override
+                        public void onDisconnected(@NonNull CameraDevice device) {
+                            device.close();
+                            cameraDevice = null;
+                        }
+
+                        @Override
+                        public void onError(@NonNull CameraDevice device, int error) {
+                            String msg = String.format("摄像头出错，错误码：%d", error);
+                            device.close();
+                            cameraDevice = null;
+                            Timber.tag(TAG).e(msg);
+                            notifyError(RUNTIME_ERROR, ERROR_OpenCamera, msg);
+                        }
+                    }, cameraHandler);
+                } catch (CameraAccessException | SecurityException e) {
+                    notifyError(RUNTIME_ERROR, ERROR_OpenCamera, e.getMessage());
+                }
+            }
+        });
     }
 
     @Override

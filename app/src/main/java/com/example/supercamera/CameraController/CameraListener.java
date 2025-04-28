@@ -1,7 +1,6 @@
 package com.example.supercamera.CameraController;
 
 import android.util.Size;
-import android.view.Surface;
 
 import com.example.supercamera.MyException.MyException;
 

@@ -34,7 +34,7 @@ public class VideoRecorderImpl implements VideoRecorder {
 
     //private RecorderConfig mConfig;
     private RecorderListener mListener;
-    private VideoEncoder mVideoEncoder = new MediaCodecImpl();
+    private final VideoEncoder mVideoEncoder = new MediaCodecImpl();
     private MediaMuxer mMediaMuxer;
     private int mTrackIndex = -1;
     private Surface mInputSurface;
