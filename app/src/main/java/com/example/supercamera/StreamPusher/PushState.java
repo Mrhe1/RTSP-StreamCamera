@@ -5,7 +5,7 @@ import timber.log.Timber;
 
 public class PushState {
         private static final String TAG = "PushState";
-        public static final AtomicReference<PushStateEnum> currentState =
+        public final AtomicReference<PushStateEnum> currentState =
                 new AtomicReference<>(PushStateEnum.READY);
         public enum PushStateEnum {
                 READY,
@@ -18,7 +18,7 @@ public class PushState {
         }
 
         // 处理工作状态转换
-        public static boolean setState(PushStateEnum newState) {
+        public boolean setState(PushStateEnum newState) {
                 // 状态校验
                 if (!isValidTransition(newState)) {
                         Timber.tag(TAG).w("非法状态转换: %s → %s",
@@ -28,11 +28,11 @@ public class PushState {
                 return currentState.compareAndSet(currentState.get(), newState);
         }
 
-        public static PushStateEnum getState() {
+        public PushStateEnum getState() {
                 return currentState.get();
         }
 
-        private static boolean isValidTransition(PushStateEnum newState) {
+        private boolean isValidTransition(PushStateEnum newState) {
                 // 实现状态转换规则校验
                 PushStateEnum current = currentState.get();
                 return switch (current) {

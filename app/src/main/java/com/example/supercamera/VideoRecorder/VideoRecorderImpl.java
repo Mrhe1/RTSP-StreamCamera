@@ -27,6 +27,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import timber.log.Timber;
 
 public class VideoRecorderImpl implements VideoRecorder {
+    private final RecorderState state = new RecorderState();
     private static final String TAG = "VideoRecorder";
     private final Object muxerLock = new Object();
     private final Object encoderLock = new Object();
@@ -43,8 +44,9 @@ public class VideoRecorderImpl implements VideoRecorder {
 
     @Override
     public void configure(RecorderConfig config) {
-        if (RecorderState.getState() != READY) {
-            String msg = String.format("configure failed, current state: %s", RecorderState.getState());
+        if (state.getState() != READY) {
+            String msg = String.format("configure failed, current state: %s",
+                    state.getState().toString());
             Timber.tag(TAG).e(msg);
             throw throwException(ILLEGAL_STATE, ERROR_Recorder_CONFIG, msg);
         }
@@ -72,7 +74,7 @@ public class VideoRecorderImpl implements VideoRecorder {
                     @Override
                     public void onStart(MediaCodec codec, MediaFormat format) {
                         setupMuxer(format);
-                        RecorderState.setState(RECORDING);
+                        state.setState(RECORDING);
                         if (mListener != null) mListener.onStart();
                     }
 
@@ -97,7 +99,7 @@ public class VideoRecorderImpl implements VideoRecorder {
                 });
             }
 
-            RecorderState.setState(CONFIGURED);
+            state.setState(CONFIGURED);
         } catch (Exception e) {
             Timber.tag(TAG).e(e, "Encoder configuration failed");
             throw throwException(ILLEGAL_STATE, ERROR_Recorder_CONFIG, e.getMessage());
@@ -106,41 +108,43 @@ public class VideoRecorderImpl implements VideoRecorder {
 
     @Override
     public void start() {
-        if (RecorderState.getState() != CONFIGURED) {
-            String msg = String.format("start failed, current state: %s", RecorderState.getState());
+        if (state.getState() != CONFIGURED) {
+            String msg = String.format("start failed, current state: %s",
+                    state.getState().toString());
             Timber.tag(TAG).e(msg);
             throw throwException(ILLEGAL_STATE, ERROR_Recorder_START, msg);
         }
 
-        RecorderState.setState(STARTING);
+        state.setState(STARTING);
 
         try {
             mVideoEncoder.start();
         } catch (MyException e) {
-            RecorderState.setState(CONFIGURED);
+            state.setState(CONFIGURED);
             throw e;
         }
     }
 
     @Override
     public void stop() {
-        if (RecorderState.getState() != RECORDING) {
-            String msg = String.format("stop failed, current state: %s", RecorderState.getState());
+        if (state.getState() != RECORDING) {
+            String msg = String.format("stop failed, current state: %s",
+                    state.getState().toString());
             Timber.tag(TAG).e(msg);
             throw throwException(ILLEGAL_STATE, ERROR_Recorder_STOP, msg);
         }
 
-        RecorderState.setState(STOPPING);
+        state.setState(STOPPING);
         try {
             mVideoEncoder.stop();
             releaseMuxer();
             if (mInputSurface != null) {
                 mInputSurface.release();
             }
-            RecorderState.setState(READY);
+            state.setState(READY);
         } catch (MyException e) {
             if(e.getExceptionType() == ILLEGAL_STATE) {
-                RecorderState.setState(RECORDING);
+                state.setState(RECORDING);
             }else {
                 notifyError(e, 0, ERROR_Recorder_STOP, null);
             }
@@ -230,11 +234,11 @@ public class VideoRecorderImpl implements VideoRecorder {
     }
 
     private void notifyError(MyException e,int type, int code, String message) {
-        if (RecorderState.getState() != RECORDING &&
-                RecorderState.getState() != STARTING &&
-                RecorderState.getState() != STOPPING) return;
+        if (state.getState() != RECORDING &&
+                state.getState() != STARTING &&
+                state.getState() != STOPPING) return;
 
-        RecorderState.setState(ERROR);
+        state.setState(ERROR);
 
         Executors.newSingleThreadExecutor().submit(() -> {
             synchronized (errorLock) {
@@ -246,7 +250,7 @@ public class VideoRecorderImpl implements VideoRecorder {
                     }
                 }
 
-                RecorderState.setState(READY);
+                state.setState(READY);
 
                 if (mListener != null) {
                     if (e != null) {

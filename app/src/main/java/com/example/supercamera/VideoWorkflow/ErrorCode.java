@@ -11,6 +11,7 @@ public class ErrorCode {
     public static final int ERROR_Recorder = 0x1005;
     public static final int ERROR_Camera = 0x1006;
     public static final int ERROR_Streamer = 0x1007;
+    public static final int Start_TimeOUT = 0x1008;
     public static final Map<Integer, String> errorCodeMap = new HashMap<>();
 
     static {
@@ -21,5 +22,6 @@ public class ErrorCode {
         errorCodeMap.put(0x1005, "ERROR_Recorder");
         errorCodeMap.put(0x1006, "ERROR_Camera");
         errorCodeMap.put(0x1007, "ERROR_Streamer");
+        errorCodeMap.put(0x1008, "Start_TimeOUT");
     }
 }

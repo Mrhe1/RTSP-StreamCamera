@@ -6,7 +6,7 @@ import timber.log.Timber;
 
 public class WorkflowState {
     private static final String TAG = "WorkflowState";
-    public static final AtomicReference<WorkflowStateEnum> currentState =
+    public final AtomicReference<WorkflowStateEnum> currentState =
             new AtomicReference<>(WorkflowStateEnum.READY);
     public enum WorkflowStateEnum {
         READY,
@@ -18,7 +18,7 @@ public class WorkflowState {
     }
 
     // 处理工作状态转换
-    public static boolean setState(WorkflowStateEnum newState) {
+    public boolean setState(WorkflowStateEnum newState) {
         // 状态校验
         if (!isValidTransition(newState)) {
             Timber.tag(TAG).w("非法状态转换: %s → %s",
@@ -28,11 +28,11 @@ public class WorkflowState {
         return currentState.compareAndSet(currentState.get(), newState);
     }
 
-    public static WorkflowStateEnum getState() {
+    public WorkflowStateEnum getState() {
         return currentState.get();
     }
 
-    private static boolean isValidTransition(WorkflowStateEnum newState) {
+    private boolean isValidTransition(WorkflowStateEnum newState) {
         // 实现状态转换规则校验
         WorkflowStateEnum current = currentState.get();
         return switch (current) {

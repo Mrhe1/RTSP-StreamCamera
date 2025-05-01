@@ -5,7 +5,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import timber.log.Timber;
 public class StreamState {
     private static final String TAG = "StreamState";
-    public static final AtomicReference<StreamStateEnum> currentState =
+    public final AtomicReference<StreamStateEnum> currentState =
             new AtomicReference<>(StreamStateEnum.READY);
     public enum StreamStateEnum {
         READY,
@@ -18,7 +18,7 @@ public class StreamState {
     }
 
     // 处理工作状态转换
-    public static boolean setState(StreamStateEnum newState) {
+    public boolean setState(StreamStateEnum newState) {
         // 状态校验
         if (!isValidTransition(newState)) {
             Timber.tag(TAG).w("非法状态转换: %s → %s",
@@ -28,11 +28,11 @@ public class StreamState {
         return currentState.compareAndSet(currentState.get(), newState);
     }
 
-    public static StreamStateEnum getState() {
+    public StreamStateEnum getState() {
         return currentState.get();
     }
 
-    private static boolean isValidTransition(StreamStateEnum newState) {
+    private boolean isValidTransition(StreamStateEnum newState) {
         // 实现状态转换规则校验
         StreamStateEnum current = currentState.get();
         return switch (current) {

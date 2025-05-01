@@ -6,7 +6,7 @@ import timber.log.Timber;
 
 public class RecorderState {
     private static final String TAG = "RecorderState";
-    public static final AtomicReference<RecorderStateEnum> currentState =
+    public final AtomicReference<RecorderStateEnum> currentState =
             new AtomicReference<>(RecorderStateEnum.READY);
     public enum RecorderStateEnum {
         READY,
@@ -18,7 +18,7 @@ public class RecorderState {
     }
 
     // 处理工作状态转换
-    public static boolean setState(RecorderStateEnum newState) {
+    public boolean setState(RecorderStateEnum newState) {
         // 状态校验
         if (!isValidTransition(newState)) {
             Timber.tag(TAG).w("非法状态转换: %s → %s",
@@ -28,11 +28,11 @@ public class RecorderState {
         return currentState.compareAndSet(currentState.get(), newState);
     }
 
-    public static RecorderStateEnum getState() {
+    public RecorderStateEnum getState() {
         return currentState.get();
     }
 
-    private static boolean isValidTransition(RecorderStateEnum newState) {
+    private boolean isValidTransition(RecorderStateEnum newState) {
         // 实现状态转换规则校验
         RecorderStateEnum current = currentState.get();
         return switch (current) {

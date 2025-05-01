@@ -6,7 +6,7 @@ import timber.log.Timber;
 
 public class CameraState {
     private static final String TAG = "CameraState";
-    public static final AtomicReference<CameraStateEnum> currentState =
+    public final AtomicReference<CameraStateEnum> currentState =
             new AtomicReference<>(CameraStateEnum.READY);
 
     public enum CameraStateEnum {
@@ -18,7 +18,7 @@ public class CameraState {
         CLOSING
     }
 
-    public static boolean setState(CameraStateEnum newState) {
+    public boolean setState(CameraStateEnum newState) {
         if (!isValidTransition(newState)) {
             Timber.tag(TAG).w("Invalid state transition: %s → %s",
                     currentState.get(), newState);
@@ -27,11 +27,11 @@ public class CameraState {
         return currentState.compareAndSet(currentState.get(), newState);
     }
 
-    public static CameraStateEnum getState() {
+    public CameraStateEnum getState() {
         return currentState.get();
     }
 
-    private static boolean isValidTransition(CameraStateEnum newState) {
+    private boolean isValidTransition(CameraStateEnum newState) {
         CameraStateEnum current = currentState.get();
         return switch (current) {
             case READY -> newState == CameraStateEnum.CONFIGURING;

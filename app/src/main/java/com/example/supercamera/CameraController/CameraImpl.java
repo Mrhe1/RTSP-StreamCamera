@@ -59,6 +59,7 @@ import io.reactivex.rxjava3.subjects.PublishSubject;
 import timber.log.Timber;
 
 public class CameraImpl implements CameraController {
+    private final CameraState state = new CameraState();
     private CameraConfig mConfig;
     private CameraListener mListener;
     private Handler cameraHandler;
@@ -82,13 +83,14 @@ public class CameraImpl implements CameraController {
     @Override
     public void configure(CameraConfig config) {
         synchronized (publicLock) {
-            if (CameraState.getState() != READY) {
-                String msg = String.format("configure failed, current state: %s", StreamState.getState());
+            if (state.getState() != READY) {
+                String msg = String.format("configure failed, current state: %s",
+                        state.getState().toString());
                 Timber.tag(TAG).e(msg);
                 throw throwException(ILLEGAL_STATE, ERROR_CAMERA_Configure, msg);
             }
 
-            CameraState.setState(CONFIGURING);
+            state.setState(CONFIGURING);
             this.mConfig = config;
 
             // 获取cameraId
@@ -111,12 +113,13 @@ public class CameraImpl implements CameraController {
 
     @Override
     public void openCamera(List<Surface> surfaces) {
-        if (CameraState.getState() != CONFIGURING) {
-            String msg = String.format("openCamera failed, current state: %s", StreamState.getState());
+        if (state.getState() != CONFIGURING) {
+            String msg = String.format("openCamera failed, current state: %s",
+                    state.getState().toString());
             Timber.tag(TAG).e(msg);
             throw throwException(ILLEGAL_STATE, ERROR_OpenCamera, msg);
         }
-        CameraState.setState(OPENING);
+        state.setState(OPENING);
 
         Executors.newSingleThreadExecutor().submit(() -> {
             synchronized (publicLock) {
@@ -160,8 +163,8 @@ public class CameraImpl implements CameraController {
     @Override
     public void stop() {
         synchronized (publicLock) {
-            if (CameraState.getState() != PREVIEWING) {
-                String msg = String.format("stop failed, current state: %s", StreamState.getState());
+            if (state.getState() != PREVIEWING) {
+                String msg = String.format("stop failed, current state: %s", state.getState().toString());
                 Timber.tag(TAG).e(msg);
                 throw throwException(ILLEGAL_STATE, ERROR_StopCamera, msg);
             }
@@ -445,12 +448,12 @@ public class CameraImpl implements CameraController {
     }
 
     private void notifyError(int type,int code, String message) {
-        if (CameraState.getState() != CONFIGURING &&
-                CameraState.getState() != OPENING &&
-                CameraState.getState() != PREVIEWING &&
-                CameraState.getState() != CLOSING) return;
+        if (state.getState() != CONFIGURING &&
+                state.getState() != OPENING &&
+                state.getState() != PREVIEWING &&
+                state.getState() != CLOSING) return;
 
-        CameraState.setState(ERROR);
+        state.setState(ERROR);
 
         Executors.newSingleThreadExecutor().submit(() -> {
             synchronized (errorLock) {

@@ -76,6 +76,7 @@ import io.reactivex.rxjava3.subjects.PublishSubject;
 import timber.log.Timber;
 
 public class FFmpegPusherImpl implements StreamPusher {
+    private final PushState state = new PushState();
     private final String TAG = "FFmpegPusher";
     private PushConfig mConfig;
     private AVCodecParameters params = avcodec_parameters_alloc();
@@ -99,9 +100,9 @@ public class FFmpegPusherImpl implements StreamPusher {
     @Override
     public void configure(PushConfig config) {
         synchronized (publicLock) {
-            if (PushState.getState() != READY) {
+            if (state.getState() != READY) {
                 String msg = String.format("configure出错，IllegalState，目前状态：%s",
-                        PushState.getState().toString());
+                        state.getState().toString());
                 Timber.tag(TAG).e(msg);
                 throw throwException(ILLEGAL_STATE, ERROR_FFmpeg_CONFIG, msg);
             }
@@ -124,7 +125,7 @@ public class FFmpegPusherImpl implements StreamPusher {
             // 设置AVCodecParameters
             this.params = setEncoderParameters(config, params);
 
-            PushState.setState(CONFIGURED);
+            state.setState(CONFIGURED);
         }
     }
 
@@ -138,9 +139,9 @@ public class FFmpegPusherImpl implements StreamPusher {
     public void start(byte[] header) {
         mConfig.setHeader(header);
         synchronized (publicLock) {
-            if (PushState.getState() != CONFIGURED) {
+            if (state.getState() != CONFIGURED) {
                 String msg = String.format("start出错，IllegalState，目前状态：%s",
-                        PushState.getState().toString());
+                        state.getState().toString());
                 Timber.tag(TAG).e(msg);
                 throw throwException(ILLEGAL_STATE, ERROR_FFmpeg_START, msg);
             }
@@ -151,13 +152,13 @@ public class FFmpegPusherImpl implements StreamPusher {
                         "header或timeStampQueue为null，未设置");
             }
 
-            PushState.setState(STARTING);
+            state.setState(STARTING);
 
             Executors.newSingleThreadExecutor().submit(() -> {
                 try {
                     startFFmpeg(mConfig);
 
-                    PushState.setState(PUSHING);
+                    state.setState(PUSHING);
                     if (listener != null) {
                         reportExecutor.submit(() -> listener.onStart());
                     }
@@ -174,15 +175,15 @@ public class FFmpegPusherImpl implements StreamPusher {
     @Override
     public void stop() {
         synchronized (publicLock) {
-            if (PushState.getState() != PUSHING &&
-                    PushState.getState() != RECONNECTING) {
+            if (state.getState() != PUSHING &&
+                    state.getState() != RECONNECTING) {
                 String msg = String.format("stop出错，IllegalState，目前状态：%s",
-                        PushState.getState().toString());
+                        state.getState().toString());
                 Timber.tag(TAG).e(msg);
                 throw throwException(ILLEGAL_STATE, ERROR_FFmpeg_STOP, msg);
             }
 
-            PushState.setState(STOPPING);
+            state.setState(STOPPING);
 
             try {
                 if (statistics != null) {
@@ -194,7 +195,7 @@ public class FFmpegPusherImpl implements StreamPusher {
                 // 停止ffmpeg
                 stopFFmpeg();
 
-                PushState.setState(READY);
+                state.setState(READY);
             } catch (Exception e) {
                 Timber.tag(TAG).e(e, "停止FFmpeg出错");
             }
@@ -223,7 +224,7 @@ public class FFmpegPusherImpl implements StreamPusher {
     public void pushFrame(ByteBuffer data, MediaCodec.BufferInfo bufferInfo, Long encodedTime) {
         synchronized (publicLock) {
             synchronized (FFmpegLock) {
-                if (PushState.getState() != PushState.PushStateEnum.PUSHING
+                if (state.getState() != PUSHING
                         || (bufferInfo.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
                     return;
                 }
@@ -535,7 +536,7 @@ public class FFmpegPusherImpl implements StreamPusher {
 
     private void reconnect(int MAX_RECONNECT_ATTEMPTS, int periodSeconds) {
         synchronized (reconnectLock) {
-            if (!PushState.setState(RECONNECTING)) {
+            if (!state.setState(RECONNECTING)) {
                 Timber.tag(TAG).w("已有正在进行的重连任务");
                 return;
             }
@@ -569,7 +570,7 @@ public class FFmpegPusherImpl implements StreamPusher {
                                     notifyError(RUNTIME_ERROR, ERROR_FFmpeg_ReconnectFail,
                                             "达到最大重连次数");
                                 }
-                                if (PushState.getState() != RECONNECTING) {
+                                if (state.getState() != RECONNECTING) {
                                     disposeReconnect();
                                 }
 
@@ -578,7 +579,7 @@ public class FFmpegPusherImpl implements StreamPusher {
                                     restartPusher();
 
                                     //如果成功
-                                    PushState.setState(PUSHING);
+                                    state.setState(PUSHING);
                                     disposeReconnect();
 
                                     if (listener != null) {
@@ -650,10 +651,10 @@ public class FFmpegPusherImpl implements StreamPusher {
     }
 
     private void notifyError(int type,int code, String message) {
-        if (PushState.getState() == ERROR &&
-                PushState.getState() == READY) return;
+        if (state.getState() == ERROR &&
+                state.getState() == READY) return;
 
-        PushState.setState(ERROR);
+        state.setState(ERROR);
 
         Executors.newSingleThreadExecutor().submit(() -> {
             synchronized (onErrorLock) {
@@ -662,7 +663,7 @@ public class FFmpegPusherImpl implements StreamPusher {
                     case ERROR_FFmpeg_Reconnect, ERROR_FFmpeg_ReconnectFail -> errorStop_TypeB();
                 }
 
-                PushState.setState(READY);
+                state.setState(READY);
 
                 MyException e = new MyException(this.getClass().getPackageName(),
                         type, code, message);
@@ -694,7 +695,7 @@ public class FFmpegPusherImpl implements StreamPusher {
                 reportExecutor.shutdown();
             }
 
-            PushState.setState(READY);
+            state.setState(READY);
         } catch (Exception ignored) {}
     }
 
@@ -711,7 +712,7 @@ public class FFmpegPusherImpl implements StreamPusher {
                 reportExecutor.shutdown();
             }
 
-            PushState.setState(READY);
+            state.setState(READY);
         } catch (Exception ignored) {}
     }
 }

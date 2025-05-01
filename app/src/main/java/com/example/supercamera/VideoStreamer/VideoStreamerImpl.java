@@ -42,6 +42,7 @@ import io.reactivex.rxjava3.subjects.PublishSubject;
 import timber.log.Timber;
 
 public class VideoStreamerImpl implements VideoStreamer {
+    private final StreamState state = new StreamState();
     private final VideoEncoder mVideoEncoder = new MediaCodecImpl();
     private final StreamPusher mPusher = new FFmpegPusherImpl();
     private StreamConfig mConfig;
@@ -60,8 +61,9 @@ public class VideoStreamerImpl implements VideoStreamer {
     @Override
     public void configure(StreamConfig config) {
         synchronized (publicLock) {
-            if (StreamState.getState() != READY) {
-                String msg = String.format("configure failed, current state: %s", StreamState.getState());
+            if (state.getState() != READY) {
+                String msg = String.format("configure failed, current state: %s",
+                        state.getState().toString());
                 Timber.tag(TAG).e(msg);
                 throw throwException(ILLEGAL_STATE, ERROR_Stream_CONFIG, msg);
             }
@@ -73,7 +75,7 @@ public class VideoStreamerImpl implements VideoStreamer {
             mPusher.configure(mConfig.getPushConfig());
 
             setListeners();
-            StreamState.setState(CONFIGURED);
+            state.setState(CONFIGURED);
         }
     }
 
@@ -86,8 +88,9 @@ public class VideoStreamerImpl implements VideoStreamer {
     @Override
     public void start() {
         synchronized (publicLock) {
-            if (StreamState.getState() != CONFIGURED) {
-                String msg = String.format("start failed, current state: %s", StreamState.getState());
+            if (state.getState() != CONFIGURED) {
+                String msg = String.format("start failed, current state: %s",
+                        state.getState().toString());
                 Timber.tag(TAG).e(msg);
                 throw throwException(ILLEGAL_STATE, ERROR_Stream_START, msg);
             }
@@ -98,12 +101,12 @@ public class VideoStreamerImpl implements VideoStreamer {
                         "CaptureTimeStampQueue，未设置");
             }
 
-            StreamState.setState(STARTING);
+            state.setState(STARTING);
             try {
                 mVideoEncoder.start();
             } catch (MyException e) {
                 Timber.tag(TAG).e(e,"start失败:%s", e.getMessage());
-                StreamState.setState(READY);
+                state.setState(READY);
                 throw e;
             }
         }
@@ -113,21 +116,22 @@ public class VideoStreamerImpl implements VideoStreamer {
     @Override
     public void stop() {
         synchronized (publicLock) {
-            if (StreamState.getState() != STREAMING) {
-                String msg = String.format("stop failed, current state: %s", StreamState.getState());
+            if (state.getState() != STREAMING) {
+                String msg = String.format("stop failed, current state: %s",
+                        state.getState().toString());
                 Timber.tag(TAG).e(msg);
                 throw throwException(ILLEGAL_STATE, ERROR_Stream_STOP, msg);
             }
 
-            StreamState.setState(STOPPING);
+            state.setState(STOPPING);
             try {
                 mPusher.stop();
                 mVideoEncoder.stop();
-                StreamState.setState(READY);
+                state.setState(READY);
             } catch (MyException e) {
                 Timber.tag(TAG).e(e,"stop失败:%s", e.getMessage());
                 if(e.getExceptionType() == ILLEGAL_STATE) {
-                    StreamState.setState(STREAMING);
+                    state.setState(STREAMING);
                 }else {
                     notifyError(e, 0, ERROR_Stream_STOP, null);
                 }
@@ -171,8 +175,8 @@ public class VideoStreamerImpl implements VideoStreamer {
             public void onOutputBufferAvailable(MediaCodec codec,
                                                 int index, MediaCodec.BufferInfo info) {
                 synchronized (dimensionLock) {
-                    if(StreamState.getState() != STREAMING &&
-                    StreamState.getState() != STARTING) return;
+                    if(state.getState() != STREAMING &&
+                    state.getState() != STARTING) return;
 
                     // 获取实际的 ByteBuffer
                     ByteBuffer outputBuffer = codec.getOutputBuffer(index);
@@ -183,7 +187,7 @@ public class VideoStreamerImpl implements VideoStreamer {
 
                     // 忽略配置数据（如 SPS/PPS）
                     if ((info.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
-                        if (StreamState.getState() == StartPUSHING) {
+                        if (state.getState() == StartPUSHING) {
                             // 提取 SPS/PPS
                             byte[] configData = new byte[info.size];
                             outputBuffer.position(info.offset);
@@ -215,7 +219,7 @@ public class VideoStreamerImpl implements VideoStreamer {
 
             @Override
             public void onStart() {
-                StreamState.setState(STREAMING);
+                state.setState(STREAMING);
                 if(mListener != null) mListener.onStart();
             }
 
@@ -232,7 +236,7 @@ public class VideoStreamerImpl implements VideoStreamer {
     }
 
     private void startPush(byte[] configData) {
-        StreamState.setState(StartPUSHING);
+        state.setState(StartPUSHING);
         try {
             if(CaptureTimeStampQueue == null) {
                 throw throwException(ILLEGAL_ARGUMENT,ERROR_Stream_START,
@@ -290,11 +294,11 @@ public class VideoStreamerImpl implements VideoStreamer {
     }
 
     private void notifyError(MyException e,int type, int code, String message) {
-        if (StreamState.getState() != STREAMING &&
-                StreamState.getState() != STREAMING &&
-                StreamState.getState() != STOPPING) return;
+        if (state.getState() != STREAMING &&
+                state.getState() != STREAMING &&
+                state.getState() != STOPPING) return;
 
-        StreamState.setState(ERROR);
+        state.setState(ERROR);
 
         Executors.newSingleThreadExecutor().submit(() -> {
             synchronized (errorLock) {
@@ -313,7 +317,7 @@ public class VideoStreamerImpl implements VideoStreamer {
                     }
                 }
 
-                StreamState.setState(READY);
+                state.setState(READY);
                 if (mListener != null) {
                     if (e != null) {
                         e.addCode(code);
