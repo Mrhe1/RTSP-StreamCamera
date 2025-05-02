@@ -37,7 +37,8 @@ public class StreamState {
         StreamStateEnum current = currentState.get();
         return switch (current) {
             case READY -> newState == StreamStateEnum.CONFIGURED || newState == StreamStateEnum.ERROR;
-            case CONFIGURED -> newState == StreamStateEnum.STARTING || newState == StreamStateEnum.ERROR;
+            case CONFIGURED -> newState == StreamStateEnum.STARTING || newState == StreamStateEnum.ERROR ||
+                                newState == StreamStateEnum.CONFIGURED;
             case STARTING -> newState == StreamStateEnum.ERROR || newState == StreamStateEnum.StartPUSHING
                                 || newState == StreamStateEnum.READY;
             case StartPUSHING -> newState == StreamStateEnum.ERROR || newState == StreamStateEnum.STREAMING;

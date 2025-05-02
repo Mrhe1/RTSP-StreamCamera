@@ -39,7 +39,8 @@ public class RecorderState {
             case READY -> newState == RecorderStateEnum.CONFIGURED || newState == RecorderStateEnum.ERROR;
             case STARTING -> newState == RecorderStateEnum.ERROR || newState == RecorderStateEnum.RECORDING
                                 || newState == RecorderStateEnum.CONFIGURED;
-            case CONFIGURED -> newState == RecorderStateEnum.STARTING || newState == RecorderStateEnum.ERROR;
+            case CONFIGURED -> newState == RecorderStateEnum.STARTING || newState == RecorderStateEnum.ERROR ||
+                                newState == RecorderStateEnum.CONFIGURED;
             case RECORDING -> newState == RecorderStateEnum.ERROR || newState == RecorderStateEnum.STOPPING;
             case ERROR -> newState == RecorderStateEnum.STOPPING || newState == RecorderStateEnum.READY;
             case STOPPING -> newState == RecorderStateEnum.READY || newState == RecorderStateEnum.ERROR;

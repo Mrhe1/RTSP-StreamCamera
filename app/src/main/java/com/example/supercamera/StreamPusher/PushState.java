@@ -38,7 +38,8 @@ public class PushState {
                 return switch (current) {
                         case READY -> newState == PushStateEnum.CONFIGURED || newState == PushStateEnum.ERROR;
                         case STARTING -> newState == PushStateEnum.ERROR || newState == PushStateEnum.PUSHING;
-                        case CONFIGURED -> newState == PushStateEnum.STARTING || newState == PushStateEnum.ERROR;
+                        case CONFIGURED -> newState == PushStateEnum.STARTING || newState == PushStateEnum.ERROR ||
+                                                newState == PushStateEnum.CONFIGURED;
                         case PUSHING -> newState == PushStateEnum.ERROR || newState == PushStateEnum.STOPPING
                                 || newState == PushStateEnum.RECONNECTING;
                         case RECONNECTING -> newState == PushStateEnum.ERROR || newState == PushStateEnum.PUSHING

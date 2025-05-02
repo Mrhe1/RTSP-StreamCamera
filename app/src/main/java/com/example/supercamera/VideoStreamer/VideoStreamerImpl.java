@@ -61,7 +61,7 @@ public class VideoStreamerImpl implements VideoStreamer {
     @Override
     public void configure(StreamConfig config) {
         synchronized (publicLock) {
-            if (state.getState() != READY) {
+            if (state.getState() != READY && state.getState() != CONFIGURED) {
                 String msg = String.format("configure failed, current state: %s",
                         state.getState().toString());
                 Timber.tag(TAG).e(msg);

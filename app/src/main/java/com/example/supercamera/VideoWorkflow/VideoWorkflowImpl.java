@@ -9,7 +9,9 @@ import static com.example.supercamera.VideoWorkflow.ErrorCode.ERROR_Workflow_CON
 import static com.example.supercamera.VideoWorkflow.ErrorCode.ERROR_Workflow_START;
 import static com.example.supercamera.VideoWorkflow.ErrorCode.ERROR_Workflow_STOP;
 import static com.example.supercamera.VideoWorkflow.ErrorCode.Start_TimeOUT;
+import static com.example.supercamera.VideoWorkflow.ErrorCode.Surface_TimeOUT;
 import static com.example.supercamera.VideoWorkflow.WorkflowState.WorkflowStateEnum.CONFIGURED;
+import static com.example.supercamera.VideoWorkflow.WorkflowState.WorkflowStateEnum.DESTROYED;
 import static com.example.supercamera.VideoWorkflow.WorkflowState.WorkflowStateEnum.ERROR;
 import static com.example.supercamera.VideoWorkflow.WorkflowState.WorkflowStateEnum.READY;
 import static com.example.supercamera.VideoWorkflow.WorkflowState.WorkflowStateEnum.STARTING;
@@ -38,15 +40,19 @@ import android.graphics.SurfaceTexture;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Size;
+import android.view.Gravity;
 import android.view.Surface;
 import android.view.TextureView;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.FrameLayout;
 
 import androidx.annotation.NonNull;
 
-import java.util.concurrent.Executor;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledThreadPoolExecutor;
 
 import timber.log.Timber;
 
@@ -99,6 +105,24 @@ public class VideoWorkflowImpl implements VideoWorkflow {
             }
         }
 
+        public Surface getPushSurface() {
+            synchronized (surfLock) {
+                return pushSurface;
+            }
+        }
+
+        public Surface getRecordSurface() {
+            synchronized (surfLock) {
+                return recordSurface;
+            }
+        }
+
+        public SurfaceTexture getSurfaceTexture() {
+            synchronized (surfLock) {
+                return surfTexture;
+            }
+        }
+
         private boolean checkSurface() {
             return pushSurface != null && recordSurface != null
                     && surfTexture != null;
@@ -132,13 +156,17 @@ public class VideoWorkflowImpl implements VideoWorkflow {
         @Override
         public void onStart() {
             reportExecutor.submit(() -> {
-                mListener.onStart();
+                Timber.tag(TAG).i("工作流开始成功");
+                state.setState(WORKING);
+                // 报告最终配置
+                mListener.onStart(mPreviewSize, mRecordSize, mFps, mStabMode);
             });
         }
 
         @Override
         public void onStartTimeOUT() {
-            notifyError(null, RUNTIME_ERROR, Start_TimeOUT, "启动超时");
+            Timber.tag(TAG).e("工作流启动超时");
+            notifyError(null, RUNTIME_ERROR, Start_TimeOUT, "工作流启动超时");
         }
     };
 
@@ -154,10 +182,16 @@ public class VideoWorkflowImpl implements VideoWorkflow {
     private final String TAG = "VideoWorkflow";
     private final Object errorLock = new Object();
     private final Object publicLock = new Object();
-    private Handler mMainHandler = new Handler(Looper.getMainLooper());
-    private ExecutorService reportExecutor = Executors.newSingleThreadExecutor();
+    private final Handler mMainHandler = new Handler(Looper.getMainLooper());
+    private final ExecutorService reportExecutor = Executors.newSingleThreadExecutor();
     // 开始的超时时间
     private final Long startTimeOutMilliseconds = 3_000L;
+    private final Long waitForSurfaceTimeMilliseconds = 1_500L;
+    // 最终配置参数
+    private Size mPreviewSize;
+    private Size mRecordSize;
+    private int mFps;
+    private int mStabMode;
 
     public VideoWorkflowImpl(Context context, TextureView textureView) {
         this.streamer = new VideoStreamerImpl();
@@ -170,7 +204,7 @@ public class VideoWorkflowImpl implements VideoWorkflow {
     @Override
     public void configure(WorkflowConfig config) {
         synchronized (publicLock) {
-            if (state.getState() != READY) {
+            if (state.getState() != READY && state.getState() != CONFIGURED) {
                 String msg = String.format("configure failed, current state: %s",
                         state.getState().toString());
                 Timber.tag(TAG).e(msg);
@@ -185,6 +219,8 @@ public class VideoWorkflowImpl implements VideoWorkflow {
             camera.configure(config.cameraConfig);
             recorder.configure(config.recorderConfig);
             streamer.configure(config.streamConfig);
+
+            state.setState(CONFIGURED);
         }
     }
 
@@ -199,8 +235,67 @@ public class VideoWorkflowImpl implements VideoWorkflow {
 
         Executors.newSingleThreadExecutor().submit(() -> {
             synchronized (publicLock) {
-                checker.setUpChecker(startTimeOutMilliseconds);
+                try {
+                    checker.setUpChecker(startTimeOutMilliseconds);
 
+                    // 启动录制
+                    recorder.start();
+                    // 启动推流
+                    streamer.start();
+
+                    if (!surfaceManger.waitSurfaceReady(waitForSurfaceTimeMilliseconds)) {
+                        notifyError(null, RUNTIME_ERROR, Surface_TimeOUT,
+                                "surface准备超时");
+                    }
+
+                    // 准备surfacesList
+                    List<Surface> surfaces = new ArrayList<>();
+                    surfaces.add(surfaceManger.getPushSurface());
+                    surfaces.add(surfaceManger.getRecordSurface());
+                    SurfaceTexture surfaceTexture = surfaceManger.getSurfaceTexture();
+                    surfaceTexture.setDefaultBufferSize(mConfig.pushSize.getWidth(),
+                            mConfig.pushSize.getHeight());
+                    surfaces.add(new Surface(surfaceTexture));
+
+                    // 打开摄像头
+                    camera.openCamera(surfaces);
+
+                    // 更新UI
+                    // 预览方向
+                    mMainHandler.post(() -> textureView.setRotation(270));
+
+                    // 计算正确的宽高比
+                    float aspectRatio = (float) mConfig.pushSize.getHeight() /
+                            mConfig.pushSize.getWidth();
+
+                    // 更新布局参数
+                    textureView.post(() -> {
+                        ViewGroup parent = (ViewGroup) textureView.getParent();
+                        int viewWidth = parent.getWidth();
+                        int viewHeight = parent.getHeight();
+
+                        // 计算适配后的尺寸
+                        int targetWidth, targetHeight;
+                        targetWidth = viewHeight;
+                        targetHeight = (int) (viewHeight / aspectRatio);
+
+                        // 设置居中布局参数
+                        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                                targetWidth,
+                                targetHeight
+                        );
+                        params.gravity = Gravity.CENTER;
+                        textureView.setLayoutParams(params);
+
+                        // 延迟显示确保布局完成
+                        new Handler().postDelayed(() ->
+                                textureView.setVisibility(View.VISIBLE), 100);
+                    });
+
+                    state.setState(WORKING);
+                } catch (MyException e) {
+                    notifyError(e,0,ERROR_Workflow_START,null);
+                }
             }
         });
     }
@@ -215,14 +310,31 @@ public class VideoWorkflowImpl implements VideoWorkflow {
         }
 
         synchronized (publicLock) {
-
+            try{
+                // 停止推流
+                streamer.stop();
+                // 停止摄像头
+                camera.stop();
+                // 停止录制
+                recorder.stop();
+                // 更新state
+                state.setState(READY);
+            } catch (MyException e) {
+                Timber.tag(TAG).e(e,"停止工作流出错");
+            }
         }
     }
 
     @Override
     public void destroy() {
         synchronized (publicLock) {
+            stop();
 
+            if(reportExecutor != null) {
+                reportExecutor.shutdown();
+            }
+
+            state.setState(DESTROYED);
         }
     }
 
@@ -242,6 +354,10 @@ public class VideoWorkflowImpl implements VideoWorkflow {
             @Override
             public void onCameraOpened(Size previewSize, Size recordSize, int fps, int stabMode) {
                 checker.reportStart(CAMERA, true);
+                mPreviewSize = previewSize;
+                mRecordSize = recordSize;
+                mFps = fps;
+                mStabMode = stabMode;
             }
         });
 
@@ -309,8 +425,56 @@ public class VideoWorkflowImpl implements VideoWorkflow {
 
         Executors.newSingleThreadExecutor().submit(() -> {
             synchronized (errorLock) {
+                switch (code) {
+                    case ERROR_Workflow_START -> {
+                        stopStream();
+                        stopCamera();
+                        stopRecorder();
+                    }
+                    case ERROR_Recorder -> {
+                        stopStream();
+                        stopCamera();
+                    }
+                    case ERROR_Streamer -> {
+                        stopCamera();
+                        stopStream();
+                    }
+                    case ERROR_Camera, Surface_TimeOUT -> {
+                        stopStream();
+                        stopRecorder();
+                    }
+                }
 
+                if(mListener != null) {
+                    if(e != null) {
+                        e.addCode(code);
+                        mListener.onError(e);
+                    }else {
+                        mListener.onError(throwException(type,code,message));
+                    }
+                }
             }
         });
+    }
+
+    private void stopStream() {
+        try{
+            streamer.stop();
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void stopCamera() {
+        try{
+            camera.stop();
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void stopRecorder() {
+        try{
+            recorder.stop();
+        } catch (Exception ignored) {
+        }
     }
 }

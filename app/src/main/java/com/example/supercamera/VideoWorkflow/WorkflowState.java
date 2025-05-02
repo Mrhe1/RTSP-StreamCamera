@@ -14,7 +14,8 @@ public class WorkflowState {
         ERROR,
         STARTING,
         WORKING,
-        STOPPING
+        STOPPING,
+        DESTROYED // 已销毁
     }
 
     // 处理工作状态转换
@@ -43,6 +44,7 @@ public class WorkflowState {
             case WORKING -> newState == WorkflowStateEnum.ERROR || newState == WorkflowStateEnum.STOPPING;
             case ERROR -> newState == WorkflowStateEnum.STOPPING || newState == WorkflowStateEnum.READY;
             case STOPPING -> newState == WorkflowStateEnum.READY || newState == WorkflowStateEnum.ERROR;
+            case DESTROYED -> false;
         };
     }
 }

@@ -100,7 +100,7 @@ public class FFmpegPusherImpl implements StreamPusher {
     @Override
     public void configure(PushConfig config) {
         synchronized (publicLock) {
-            if (state.getState() != READY) {
+            if (state.getState() != READY && state.getState() != CONFIGURED) {
                 String msg = String.format("configure出错，IllegalState，目前状态：%s",
                         state.getState().toString());
                 Timber.tag(TAG).e(msg);

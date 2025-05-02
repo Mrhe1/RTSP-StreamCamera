@@ -44,7 +44,7 @@ public class VideoRecorderImpl implements VideoRecorder {
 
     @Override
     public void configure(RecorderConfig config) {
-        if (state.getState() != READY) {
+        if (state.getState() != READY && state.getState() != CONFIGURED) {
             String msg = String.format("configure failed, current state: %s",
                     state.getState().toString());
             Timber.tag(TAG).e(msg);

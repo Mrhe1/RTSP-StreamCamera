@@ -9,7 +9,7 @@ import static com.example.supercamera.CameraController.CameraConfig.Stab_HYBRID;
 import static com.example.supercamera.CameraController.CameraConfig.Stab_OFF;
 import static com.example.supercamera.CameraController.CameraConfig.Stab_OIS_ONLY;
 import static com.example.supercamera.CameraController.CameraState.CameraStateEnum.CLOSING;
-import static com.example.supercamera.CameraController.CameraState.CameraStateEnum.CONFIGURING;
+import static com.example.supercamera.CameraController.CameraState.CameraStateEnum.CONFIGURE;
 import static com.example.supercamera.CameraController.CameraState.CameraStateEnum.ERROR;
 import static com.example.supercamera.CameraController.CameraState.CameraStateEnum.OPENING;
 import static com.example.supercamera.CameraController.CameraState.CameraStateEnum.PREVIEWING;
@@ -46,7 +46,6 @@ import androidx.annotation.Nullable;
 
 import com.example.supercamera.MyException.MyException;
 import com.example.supercamera.StreamPusher.PushStats.TimeStamp;
-import com.example.supercamera.VideoStreamer.StreamState;
 
 import java.util.Arrays;
 import java.util.HashSet;
@@ -83,14 +82,14 @@ public class CameraImpl implements CameraController {
     @Override
     public void configure(CameraConfig config) {
         synchronized (publicLock) {
-            if (state.getState() != READY) {
+            if (state.getState() != READY && state.getState() == CONFIGURE) {
                 String msg = String.format("configure failed, current state: %s",
                         state.getState().toString());
                 Timber.tag(TAG).e(msg);
                 throw throwException(ILLEGAL_STATE, ERROR_CAMERA_Configure, msg);
             }
 
-            state.setState(CONFIGURING);
+            state.setState(CONFIGURE);
             this.mConfig = config;
 
             // 获取cameraId
@@ -102,7 +101,7 @@ public class CameraImpl implements CameraController {
 
             // 检查分辨率
             if(!checkResolutionSupport(config.previewSize, config.recordSize)) {
-                throwException(RUNTIME_ERROR, ERROR_CAMERA_Configure, "分辨率不支持");
+                throw throwException(RUNTIME_ERROR, ERROR_CAMERA_Configure, "分辨率不支持");
             }
             // 获取fpsRange
             fpsRange = getFpsRange(config.fps);
@@ -113,7 +112,7 @@ public class CameraImpl implements CameraController {
 
     @Override
     public void openCamera(List<Surface> surfaces) {
-        if (state.getState() != CONFIGURING) {
+        if (state.getState() != CONFIGURE) {
             String msg = String.format("openCamera failed, current state: %s",
                     state.getState().toString());
             Timber.tag(TAG).e(msg);
@@ -312,7 +311,7 @@ public class CameraImpl implements CameraController {
             if (range.getUpper() >= targetFps && range.getLower() <= targetFps) {
                 if (bestDynamicRange == null
                         || (range.getUpper() > bestDynamicRange.getUpper()) // 优先更高上限
-                        || (range.getUpper() == bestDynamicRange.getUpper()
+                        || (range.getUpper().equals(bestDynamicRange.getUpper())
                         && range.getLower() > bestDynamicRange.getLower())) { // 次优先更高下限
                     bestDynamicRange = range;
                 }
@@ -380,10 +379,8 @@ public class CameraImpl implements CameraController {
                     try {
                         session.setRepeatingRequest(requestBuilder.build(), null, cameraHandler);
                         if(mListener != null) {
-                            reportExecutor.submit(() -> {
-                                mListener.onCameraOpened(mConfig.previewSize, mConfig.recordSize,
-                                        fpsRange.getUpper(), finalStabMode);
-                            });
+                            reportExecutor.submit(() -> mListener.onCameraOpened(mConfig.previewSize, mConfig.recordSize,
+                                    fpsRange.getUpper(), finalStabMode));
                         }
 
                         Timber.tag(TAG).i("摄像头初始化成功");
@@ -448,7 +445,7 @@ public class CameraImpl implements CameraController {
     }
 
     private void notifyError(int type,int code, String message) {
-        if (state.getState() != CONFIGURING &&
+        if (state.getState() != CONFIGURE &&
                 state.getState() != OPENING &&
                 state.getState() != PREVIEWING &&
                 state.getState() != CLOSING) return;

@@ -11,7 +11,7 @@ public class CameraState {
 
     public enum CameraStateEnum {
         READY,
-        CONFIGURING,
+        CONFIGURE,
         OPENING,
         PREVIEWING,
         ERROR,
@@ -34,9 +34,10 @@ public class CameraState {
     private boolean isValidTransition(CameraStateEnum newState) {
         CameraStateEnum current = currentState.get();
         return switch (current) {
-            case READY -> newState == CameraStateEnum.CONFIGURING;
-            case CONFIGURING -> newState == CameraStateEnum.OPENING ||
-                    newState == CameraStateEnum.ERROR;
+            case READY -> newState == CameraStateEnum.CONFIGURE;
+            case CONFIGURE -> newState == CameraStateEnum.OPENING ||
+                    newState == CameraStateEnum.ERROR ||
+                    newState == CameraStateEnum.CONFIGURE;
             case OPENING -> newState == CameraStateEnum.PREVIEWING ||
                     newState == CameraStateEnum.ERROR;
             case PREVIEWING -> newState == CameraStateEnum.CLOSING ||
