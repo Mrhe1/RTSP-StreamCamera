@@ -97,6 +97,8 @@ public class VideoRecorderImpl implements VideoRecorder {
                         // Surface模式无需处理
                     }
                 });
+
+                mMediaMuxer = new MediaMuxer(config.path, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
             }
 
             state.setState(CONFIGURED);

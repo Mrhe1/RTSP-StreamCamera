@@ -6,6 +6,7 @@ import android.media.MediaFormat;
 public class RecorderConfig {
     public final int width;
     public final int height;
+    public final String path;
     public final int fps;
     public final int iFrameInterval;
     public final String mimeType;
@@ -15,6 +16,7 @@ public class RecorderConfig {
     private RecorderConfig(Builder builder) {
         this.width = builder.width;
         this.height = builder.height;
+        this.path = builder.path;
         this.fps = builder.fps;
         this.iFrameInterval = builder.iFrameInterval;
         this.mimeType = builder.mimeType;
@@ -26,6 +28,7 @@ public class RecorderConfig {
         // Required parameters
         private final int width;
         private final int height;
+        private final String path;
 
         // Optional parameters with defaults
         private int fps = 30;
@@ -34,9 +37,10 @@ public class RecorderConfig {
         private int profile = MediaCodecInfo.CodecProfileLevel.AVCProfileHigh;
         private int bitrate = 4_000; // 4mbps
 
-        public Builder(int width, int height) {
+        public Builder(int width, int height, String path) {
             this.width = width;
             this.height = height;
+            this.path = path;
         }
 
         public Builder setFps(int fps) {

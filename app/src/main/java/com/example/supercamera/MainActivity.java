@@ -1,234 +1,84 @@
 package com.example.supercamera;
 
+import static com.example.supercamera.CameraController.CameraConfig.Camera_Facing_BACK;
+import static com.example.supercamera.CameraController.CameraConfig.Stab_OFF;
+
 import android.content.Context;
 import android.content.pm.PackageManager;
-import android.graphics.SurfaceTexture;
-import android.hardware.camera2.CameraAccessException;
-import android.hardware.camera2.CameraCaptureSession;
-import android.hardware.camera2.CameraCharacteristics;
-import android.hardware.camera2.CameraDevice;
-import android.hardware.camera2.CameraManager;
-import android.hardware.camera2.CaptureRequest;
-import android.hardware.camera2.TotalCaptureResult;
-import android.hardware.camera2.params.StreamConfigurationMap;
+import android.media.MediaFormat;
 import android.os.Bundle;
 import android.os.Environment;
-import android.os.Handler;
-import android.os.HandlerThread;
-import android.os.Looper;
 import android.util.Size;
 
-import java.util.ArrayList;
-import java.util.Arrays;
 import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
-import io.reactivex.rxjava3.android.schedulers.AndroidSchedulers;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
-import io.reactivex.rxjava3.disposables.CompositeDisposable;
-import io.reactivex.rxjava3.disposables.Disposable;
 import timber.log.Timber;
 
-import android.view.Gravity;
-import android.view.Surface;
 import android.view.TextureView;
 import android.view.View;
 import java.io.File;
 import java.text.SimpleDateFormat;
 import java.util.Locale;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicIntegerArray;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.Date;
 import android.Manifest;
-import android.view.ViewGroup;
 import android.widget.Button;
-import android.util.Range;
-import android.widget.FrameLayout;
+
+import com.example.supercamera.MyException.MyException;
+import com.example.supercamera.StreamPusher.PushStats.PushStatsInfo;
+import com.example.supercamera.VideoWorkflow.VideoWorkflow;
+import com.example.supercamera.VideoWorkflow.VideoWorkflowImpl;
+import com.example.supercamera.VideoWorkflow.WorkflowConfig;
+import com.example.supercamera.VideoWorkflow.WorkflowListener;
 
 /////////////////////////////////////////////注意要求push与record帧率一致！！！！#####
 public class MainActivity extends AppCompatActivity {
-    // 新增防抖模式枚举
-    public enum StabilizationMode {
-        OFF,
-        OIS_ONLY,   // 仅光学防抖
-        EIS_ONLY,   // 仅电子防抖
-        HYBRID      // 混合模式（OIS+EIS）
-    }
-
-    public final onStartedCheck checker = new onStartedCheck();
-    private final AtomicReference<StabilizationMode> currentPushStabMode =
-            new AtomicReference<>(StabilizationMode.OFF);
-    private final AtomicReference<StabilizationMode> currentRecordStabMode =
-            new AtomicReference<>(StabilizationMode.OFF);
-    private final AtomicInteger currentPushFps = new AtomicInteger(-1);
-    private final AtomicInteger currentRecordFps = new AtomicInteger(-1);
-
-    public enum WorkflowState {
-        IDLE,             // 初始状态
-        READY,              // 准备就绪
-        STARTING,       // 初始化中
-        WORKING,          // 工作中
-        STOPPING,       // 关闭中
-        ERROR          //出错
-    }
-
-    private static final AtomicReference<WorkflowState> currentState =
-            new AtomicReference<>(WorkflowState.IDLE);
-
-    private VideoPusher videoPusher;
-    private VideoRecorder videoRecorder;
-    private static final String TAG = "MaiActivity";
-    private static final String TAGCamera = "StartCamera";
-    private static final String TAGWorkflowState = "WorkflowState";
-    private final Object startStopLock = new Object();
-    private final Object checkPermissionLock = new Object();
-    private volatile boolean isPermitted = false;
-    private static final int CAMERA_PERMISSION_REQUEST_CODE = 100;
-    //按钮变量
     private Button btnStart;
     private Button btnStop;
-    private CompositeDisposable compositeDisposable;
-    private CameraDevice cameraDevice;
-    private CameraCaptureSession cameraCaptureSession;
-    private Handler cameraHandler;
-    private String cameraId;
-    // camera错误代码常量
-    private static final int ERROR_CAMERA_IN_USE = 1;
-    private static final int ERROR_MAX_CAMERAS_IN_USE = 2;
-    private static final int ERROR_CAMERA_DEVICE = 3;
-    private static final int ERROR_CAMERA_DISABLED = 4;
-    private static final int ERROR_CAMERA_SERVICE = 5;
-    private static final int SURFACE_TIMEOUT = 6;
     private TextureView textureView;
-    private SurfaceTexture surfaceTexture;
-    private volatile boolean isSurfaceAvailable = false;
-    private final Object surfaceLock = new Object();
-    private Surface previewSurface = null;
-    private ScheduledExecutorService globalErrorHandler;
-
-    public class onStartedCheck{
-        private AtomicIntegerArray isStarted = new AtomicIntegerArray(3);
-        private static final int TIMEOUT_MILLISECONDS = 15000;
-        private ScheduledExecutorService timeoutScheduler;
-        public enum StartPart {
-            CAMERA(0),
-            PUSH(1),
-            RECORD(2);
-
-            private final int index;
-
-            StartPart(int index) {
-                this.index = index;
-            }
-
-            public int getIndex() {
-                return index;
-            }
+    private final String TAG = "MainActivity";
+    private AtomicBoolean isPermitted = new AtomicBoolean(false);
+    private static final int CAMERA_PERMISSION_REQUEST_CODE = 100;
+    private VideoWorkflow workflow;
+    private final WorkflowListener listener = new WorkflowListener() {
+        @Override
+        public void onStart(Size previewSize, Size recordSize, int fps, int stabMode) {
+            Timber.tag(TAG).i("工作流启动成功");
         }
 
-        public void onStarted(StartPart part, boolean isSuccess)
-        {
-            // 使用原子操作设置状态（1表示成功，-1表示失败）
-            isStarted.set(part.getIndex(), isSuccess ? 1 : -1);
-
-            if(currentState.get() != WorkflowState.STARTING || !isSuccess){
-                // 取消超时检测
-                try {
-                    timeoutScheduler.shutdownNow();
-                } catch (Exception e) {}
-                return;
-            }
-            if(isAllStartedSuccess())
-            {
-                Timber.tag(TAG).i("工作流开始成功");
-                // 取消超时检测
-                timeoutScheduler.shutdownNow();
-                setState(WorkflowState.WORKING);
-                updateButtonState();
-                onStartReport();// 报告最终摄像头配置
-            }
+        @Override
+        public void onError(MyException e) {
+            Timber.tag(TAG).e(e,"工作流出错：%s，%s；package：%s,code:%s",
+                                e.getCodeString(), e.getMessage(),
+                                e.getErrorPackage(), e.getCode());
+            runOnUiThread(() -> {
+                btnStart.setEnabled(true);
+                btnStop.setEnabled(false);
+            });
         }
 
-        public void reset() {
-            if (timeoutScheduler != null) {
-                try {
-                    timeoutScheduler.shutdownNow();
-                } catch (Exception e) {}
-            }
-            timeoutScheduler = null; // 释放引用
-
-            for (int i = 0; i < isStarted.length(); i++) {
-                isStarted.set(i, 0);
-            }
+        @Override
+        public void onStatistics(PushStatsInfo stats) {
+            String msg = String.format("推流统计:码率：%dkbps；丢包率：%f%%；RTT：%dms；总延迟：%dms",
+                    stats.currentBitrate, stats.pushFailureRate,
+                    stats.rtt, stats.totalLatency);
+            Timber.tag(TAG).i(msg);
         }
-
-        public void onBeforeStart()
-        {
-            // 确保每次启动都创建新线程池
-            if (timeoutScheduler == null || timeoutScheduler.isShutdown()) {
-                timeoutScheduler = new ScheduledThreadPoolExecutor(1, r -> {
-                    Thread t = new Thread(r);
-                    t.setDaemon(true); // 设置为守护线程
-                    return t;
-                });
-            }
-
-            // 重置所有状态
-            for (int i = 0; i < isStarted.length(); i++) {
-                isStarted.set(i, 0); // 0表示未完成
-            }
-
-            // 启动超时检测
-            timeoutScheduler.schedule(this::interrupt, TIMEOUT_MILLISECONDS, TimeUnit.MILLISECONDS);
-        }
-
-        private void interrupt()
-        {
-            currentState.set(WorkflowState.ERROR);
-            Timber.tag(TAG).w("启动超时，未完成组件状态:");
-            for (int i = 0; i < isStarted.length(); i++) {
-                int status = isStarted.get(i);
-                Timber.tag(TAG).w("%s: %s",
-                        StartPart.values()[i].name(),
-                        status == 1 ? "成功" : status == -1 ? "失败" : "未完成"
-                );
-            }
-            Stop();
-        }
-
-        // 状态检查
-        public boolean isAllStartedSuccess() {
-            for (int i = 0; i < isStarted.length(); i++) {
-                if (isStarted.get(i) != 1) {
-                    return false;
-                }
-            }
-            return true;
-        }
-    }
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        compositeDisposable = new CompositeDisposable();
         setContentView(R.layout.activity_main);
 
         textureView = findViewById(R.id.textureView);
-        textureView.setSurfaceTextureListener(surfaceTextureListener);
 
-        setPermitted(checkCameraPermission());//权限检查
-        if (!isPermitted()) {
+        isPermitted.set(checkCameraPermission());//权限检查
+        if (!isPermitted.get()) {
             requestCameraPermission();
         }
 
@@ -242,711 +92,67 @@ public class MainActivity extends AppCompatActivity {
 
         textureView = findViewById(R.id.textureView);
         textureView.setVisibility(View.VISIBLE); // 立即可见
-        textureView.setSurfaceTextureListener(surfaceTextureListener);
 
         // 初始化按钮状态
-        updateButtonState();
+        btnStart.setEnabled(true);
+        btnStop.setEnabled(false);
 
-        // 初始化全局错误处理线程池（单线程）
-        globalErrorHandler = Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread t = new Thread(r, "GlobalErrorHandler");
-            t.setPriority(Thread.MIN_PRIORITY);
-            return t;
-        });
-
-        setState(WorkflowState.READY);
-    }
-
-    // 暴露全局错误处理线程池给其他组件
-    public ScheduledExecutorService getGlobalErrorHandler() {
-        return globalErrorHandler;
-    }
-
-    public static boolean setState(WorkflowState newState) {
-        // 状态校验
-        if (!isValidTransition(newState)) {
-            Timber.tag(TAGWorkflowState).w("非法状态转换: %s → %s",
-                    currentState.get(), newState);
-            return false;
-        }
-        return currentState.compareAndSet(currentState.get(), newState);
-    }
-
-    private static boolean isValidTransition(WorkflowState newState) {
-        // 实现状态转换规则校验
-        WorkflowState current = currentState.get();
-        switch (current) {
-            case IDLE: return newState == WorkflowState.READY;
-            case READY: return newState == WorkflowState.STARTING;
-            case STARTING: return newState == WorkflowState.WORKING || newState == WorkflowState.ERROR;
-            case WORKING: return newState == WorkflowState.STOPPING || newState == WorkflowState.ERROR;
-            case STOPPING: return newState == WorkflowState.READY;
-            case ERROR: return newState == WorkflowState.STOPPING;
-            default: return false;
-        }
+        workflow = new VideoWorkflowImpl(this, textureView);
+        workflow.setStreamListener(listener);
     }
 
     private void handleStart()
     {
         // 初始化推流参数
-        int push_width = 1280;
-        int push_height = 720;
-        int push_fps = 30;//**现阶段push——fps必须============record——fps**&*&&&&
-        int push_initAvgBitrate = 2200;//单位kbps
-        int push_initMaxBitrate = 2500;
-        int push_initMinBitrate = 1000;
-        StabilizationMode push_StabilizationMode = StabilizationMode.OFF;//防抖
-        StabilizationMode record_StabilizationMode = StabilizationMode.OFF;
-        int record_width = 2560;
-        int record_height = 1440;
+        Size pushSize = new Size(1280,720);
+        Size recordSize = new Size(2560,1440);
+        int fps = 30;
+        int pushBitrate = 2200;//单位kbps
+        int stabilizationMode = Stab_OFF;//防抖
         int record_bitrate = 5000;//单位kbps
         int record_fps =30;
         String push_Url = "rtsp://47.109.148.245:1521/live/stream";// rtsp://47.109.148.245:1521/live/stream
 
-        if(currentState.get() != WorkflowState.READY)
-        {
-            Timber.tag(TAG).e("无法重复开启工作流");return;
-        }
-        if(!isPermitted()) {
+        if(!isPermitted.get()) {
             requestCameraPermission();
             Timber.tag(TAG).e("权限被拒，工作流无法开始");return;
         }
-        if(Start(this, push_Url, push_width, push_height,
-                push_fps, push_initAvgBitrate, push_initMaxBitrate, push_initMinBitrate,
-                record_width, record_height, record_bitrate, record_fps,
-                push_StabilizationMode, record_StabilizationMode) == 0)
-        {
 
-        }
-        else{
-            Timber.tag(TAG).e("工作流开始失败");
+        try{
+            String path = generateUniqueFileName(this);
+            workflow.configure(new WorkflowConfig.Builder(pushSize, recordSize, push_Url, path)
+                            .setBitrateKbps(pushBitrate, record_bitrate)
+                            .setCameraFacing(Camera_Facing_BACK)
+                            .setEncoderFormat(MediaFormat.MIMETYPE_VIDEO_AVC)
+                            .setFps(fps)
+                            .setIFrameInterval(1)
+                            .setStabilizationMode(stabilizationMode)
+                            .build());
+            workflow.start();
+
+            runOnUiThread(() -> {
+                btnStart.setEnabled(false);
+                btnStop.setEnabled(true);
+            });
+        } catch (MyException e) {
+            Timber.tag(TAG).e(e, "开始工作流出错");
         }
     }
 
     private void handleStop()
     {
-        if(currentState.get() != WorkflowState.WORKING)
-        {
-            Timber.tag(TAG).e("工作流未开始，无法关闭");return;
-        }
-        if(!Stop())
-        {
-            Timber.tag(TAG).e("工作流关闭失败");return;
-        }
-        updateButtonState();
-    }
-
-    private int Start(Context context, String push_Url,int push_width, int push_height,
-                          int push_fps, int push_initAvgBitrate, int push_initMaxBitrate,
-                          int push_initMinBitrate, int record_width,
-                          int record_height, int record_bitrate, int record_fps,
-                      StabilizationMode push_StabilizationMode,
-                      StabilizationMode record_StabilizationMode)
-    {//return 0:成功，1：正在推流，2：码率等设置不合规，3：推流出错，4：recordpath生成出错 ，5：Surface 初始化失败，6：其他错误
-        synchronized (startStopLock) {
-            if (!setState(WorkflowState.STARTING)) {
-                Timber.tag(TAG).e("开始失败，工作流已启动");
-                return 1;
-            }
-
-            //验证push码率设置是否正确
-            if (push_initMaxBitrate < push_initAvgBitrate || push_initMinBitrate > push_initAvgBitrate) {
-                Timber.tag(TAG).e("码率设置不合规");
-                setState(WorkflowState.READY);
-                return 2;
-            }
-            //生成recordpath
-            String record_Path = generateUniqueFileName(context);
-            if (record_Path == null) {
-                Timber.tag(TAG).e("无法生成录制路径");
-                setState(WorkflowState.READY);
-                return 4;
-            }
-
-            Timber.tag(TAG).i("正在开启工作流");
-            try {
-                // 1.初始化推流服务
-                try {
-                    videoPusher = new VideoPusher(push_Url, push_width, push_height,
-                            push_fps, push_initAvgBitrate,
-                            getGlobalErrorHandler());
-                    videoPusher.startPush();
-                } catch (RuntimeException e) {
-                    Timber.tag(TAG).e("推流服务出错：%s", e.getMessage());
-                    setState(WorkflowState.ERROR);
-                    //Stop();//通过事件总线统一处理
-                    return 3;
-                }
-
-                // 2. 初始化录制服务
-                videoRecorder = new VideoRecorder();
-                videoRecorder.startRecording(record_width, record_height, push_fps, record_bitrate, record_Path); // 提前准备
-                // 检查 record Surface 有效性
-                if (!videoRecorder.isSurfaceValid()) {
-                    Timber.tag(TAG).e("录制器 Surface 初始化失败");
-                    return 5;
-                }
-                //检查 push Surface 有效性
-                if (!videoPusher.isSurfaceValid()) {
-                    Timber.tag(TAG).e("推流器 Surface 初始化失败");
-                    return 5;
-                }
-
-                // 3. 启动摄像头
-                startCamera(push_width, push_height, record_width, record_height, push_fps,
-                        push_StabilizationMode, record_StabilizationMode);
-
-                setupEventHandlers();
-                //开始异步回调
-                checker.onBeforeStart();
-                return 0;
-            } catch (Exception e) {
-                setState(WorkflowState.ERROR);
-                Timber.tag(TAG).e("启动异常: %s", e.getMessage());
-                // 释放锁后再执行停止操作
-                new Handler(Looper.getMainLooper()).post(() -> Stop());
-                return 6;
-            }
-        }
-    }
-
-    public boolean Stop() {
-        synchronized (startStopLock) {
-            if (!setState(WorkflowState.STOPPING)) {
-                Timber.tag(TAG).i("无需重复停止");
-                return true;
-            }
-
-            try {
-                // 1. 停止推流
-                if (videoPusher != null) {
-                    videoPusher.stopPush();
-                    videoPusher = null;
-                }
-                // 2. 停止摄像头
-                stopCamera();
-                // 3. 停止录制
-                if (videoRecorder != null) {
-                    videoRecorder.stopRecording();
-                    videoRecorder = null;
-                }
-                //销毁开始回调
-                if(checker != null)
-                {
-                    checker.reset();
-                }
-
-                setState(WorkflowState.READY);
-                return true;
-            } catch (Exception e) {
-                Timber.tag(TAG).e(e, "停止操作异常");
-                setState(WorkflowState.READY);//忽略停止错误
-                return false;
-            }
-        }
-    }
-
-    private void onStartReport() {
-        Timber.tag(TAG).i("最终帧率配置 => 推流模式:%s, 录制模式:%s",
-                currentPushFps.get(),
-                currentRecordFps.get());
-
-        Timber.tag(TAG).i("最终防抖配置 => 推流模式:%s, 录制模式:%s",
-                currentPushStabMode.get(),
-                currentRecordStabMode.get());
-    }
-
-    private void updateButtonState() {//更新按钮状态
-        boolean isWorking = currentState.get() == WorkflowState.WORKING;
-        btnStart.setEnabled(!isWorking);
-        btnStop.setEnabled(isWorking);
-    }
-/////////////////////////////////////////////////////////////////////////////////////////////
-                                  //CAMERA部分//***&&
-//SurfaceTexture监听器
-private final TextureView.SurfaceTextureListener surfaceTextureListener =
-        new TextureView.SurfaceTextureListener() {
-            @Override
-            public void onSurfaceTextureAvailable(@NonNull SurfaceTexture surface, int width, int height) {
-                synchronized (surfaceLock) {
-                    surfaceTexture = surface;
-                    isSurfaceAvailable = true;
-                    surfaceLock.notifyAll();
-                }
-            }
-
-            @Override
-            public void onSurfaceTextureSizeChanged(@NonNull SurfaceTexture surface, int width, int height) {
-                // 处理尺寸变化
-            }
-
-            @Override
-            public boolean onSurfaceTextureDestroyed(@NonNull SurfaceTexture surface) {
-                synchronized (surfaceLock) {
-                    isSurfaceAvailable = false;
-                }
-                return false;
-            }
-
-            @Override
-            public void onSurfaceTextureUpdated(@NonNull SurfaceTexture surface) {
-            }
-        };
-
-    // 等待Surface准备方法
-    private void waitForSurfaceReady() {
-        synchronized (surfaceLock) {
-            long endTime = System.currentTimeMillis() + 3000;
-            while (!isSurfaceAvailable && System.currentTimeMillis() < endTime) {
-                try {
-                    surfaceLock.wait(endTime - System.currentTimeMillis());
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
-            }
-            if (!isSurfaceAvailable) {
-                throw new RuntimeException("Surface准备超时");
-            }
-        }
-    }
-
-    // 分辨率检查
-    private boolean checkResolutionSupport(int pushWidth, int pushHeight, int recordWidth, int recordHeight) {
         try {
-            CameraManager manager = (CameraManager) getSystemService(Context.CAMERA_SERVICE);
-            CameraCharacteristics characteristics = manager.getCameraCharacteristics(cameraId);
-            StreamConfigurationMap map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
-
-            // 检查录制分辨率（Surface格式）
-            Size[] supportedSurfaceSizes = map.getOutputSizes(SurfaceTexture.class);
-            if (supportedSurfaceSizes == null) {
-                Timber.e("设备不支持Surface输出");
-                return false;
-            }
-            Set<Size> surfaceSizeSet = new HashSet<>(Arrays.asList(supportedSurfaceSizes));
-            Size pushSize = new Size(pushWidth, pushHeight);
-            if (!surfaceSizeSet.contains(pushSize)) {
-                Timber.e("推流分辨率 %dx%d 不支持Surface输出", pushWidth, pushHeight);
-                return false;
-            }
-
-            Size recordSize = new Size(recordWidth, recordHeight);
-            if (!surfaceSizeSet.contains(recordSize)) {
-                Timber.e("录制分辨率 %dx%d 不支持Surface输出", recordWidth, recordHeight);
-                return false;
-            }
-
-            return true;
-        } catch (CameraAccessException e) {
-            handleCameraError(ERROR_CAMERA_SERVICE);
-            return false;
-        } catch (NullPointerException e) {
-            Timber.e("摄像头配置异常: %s", e.getMessage());
-            return false;
-        }
-    }
-
-    // 帧率获取方法
-    private Range<Integer> getFpsRange(int targetFps) {
-        try {
-            CameraManager manager = (CameraManager) getSystemService(Context.CAMERA_SERVICE);
-            CameraCharacteristics characteristics = manager.getCameraCharacteristics(cameraId);
-
-            Range<Integer>[] availableRanges = characteristics.get(
-                    CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES);
-
-            // 第一阶段：寻找精确匹配的固定帧率
-            Range<Integer> exactRange = null;
-            for (Range<Integer> range : availableRanges) {
-                if (range.getLower() == targetFps && range.getUpper() == targetFps) {
-                    exactRange = range;
-                    break; // 优先选择第一个精确匹配项
-                }
-            }
-            if (exactRange != null) return exactRange;
-
-            // 第二阶段：选择包含目标帧率的最佳范围
-            Range<Integer> bestDynamicRange = getIntegerRange(targetFps, availableRanges);
-            if (bestDynamicRange != null) return bestDynamicRange;
-
-            // 第三阶段：降级选择最低可用帧率
-            int minFps = Integer.MAX_VALUE;
-            for (Range<Integer> range : availableRanges) {
-                minFps = Math.min(minFps, range.getLower());
-            }
-            return new Range<>(Math.max(minFps, 15), Math.max(minFps, 15)); // 保证最低15fps
-        } catch (CameraAccessException e) {
-            handleCameraError(ERROR_CAMERA_SERVICE);
-            return new Range<>(30, 30); // 默认安全值
-        }
-    }
-
-    @Nullable
-    private static Range<Integer> getIntegerRange(int targetFps, Range<Integer>[] availableRanges) {
-        Range<Integer> bestDynamicRange = null;
-        for (Range<Integer> range : availableRanges) {
-            if (range.getUpper() >= targetFps && range.getLower() <= targetFps) {
-                if (bestDynamicRange == null
-                        || (range.getUpper() > bestDynamicRange.getUpper()) // 优先更高上限
-                        || (range.getUpper() == bestDynamicRange.getUpper()
-                        && range.getLower() > bestDynamicRange.getLower())) { // 次优先更高下限
-                    bestDynamicRange = range;
-                }
-            }
-        }
-        return bestDynamicRange;
-    }
-
-
-    // 核心摄像头启动方法
-    private void startCamera(int pushWidth, int pushHeight, int recordWidth,
-                             int recordHeight, int targetFps,
-                             StabilizationMode pushStabMode,
-                             StabilizationMode recordStabMode) {
-        try {
-            waitForSurfaceReady(); // 确保预览Surface就绪
-        } catch (RuntimeException e) {
-            handleCameraError(SURFACE_TIMEOUT);
-            return;
-        }
-        // 检查 textureView 是否已被释放
-        if (textureView == null) {
-            textureView = findViewById(R.id.textureView);
-            textureView.setSurfaceTextureListener(surfaceTextureListener);
-        }
-
-        // 初始化摄像头线程
-        HandlerThread cameraThread = new HandlerThread("CameraBackground");
-        cameraThread.start();
-        cameraHandler = new Handler(cameraThread.getLooper());
-
-        try {
-            CameraManager manager = (CameraManager) getSystemService(Context.CAMERA_SERVICE);
-
-            // 查找后置摄像头
-            for (String id : manager.getCameraIdList()) {
-                CameraCharacteristics characteristics = manager.getCameraCharacteristics(id);
-                Integer facing = characteristics.get(CameraCharacteristics.LENS_FACING);
-                if (facing != null && facing == CameraCharacteristics.LENS_FACING_BACK) {
-                    cameraId = id;
-                    break;
-                }
-            }
-
-            if (cameraId == null) {
-                handleCameraError(ERROR_CAMERA_DEVICE);
-                return;
-            }
-
-            // 检查硬件支持
-            if (!checkResolutionSupport(pushWidth, pushHeight, recordWidth, recordHeight)) {
-                handleCameraError(ERROR_CAMERA_DEVICE);
-                return;
-            }
-
-            // 打开摄像头
-            manager.openCamera(cameraId, new CameraDevice.StateCallback() {
-                @Override
-                public void onOpened(@NonNull CameraDevice device) {
-                    cameraDevice = device;
-                    configureSession(pushWidth, pushHeight, recordWidth, recordHeight, targetFps,
-                            pushStabMode, recordStabMode);
-                }
-
-                @Override
-                public void onDisconnected(@NonNull CameraDevice device) {
-                    device.close();
-                    cameraDevice = null;
-                }
-
-                @Override
-                public void onError(@NonNull CameraDevice device, int error) {
-                    handleCameraError(error);
-                    device.close();
-                    cameraDevice = null;
-                }
-            }, cameraHandler);
-        } catch (CameraAccessException e) {
-            handleCameraError(ERROR_CAMERA_SERVICE);
-        } catch (SecurityException e) {
-            handleCameraError(ERROR_CAMERA_DISABLED);
-        }
-    }
-
-    // 配置摄像头会话
-    private void configureSession(int pushWidth, int pushHeight, int recordWidth,
-                                  int recordHeight, int targetFps,
-                                  StabilizationMode pushStabMode,
-                                  StabilizationMode recordStabMode) {
-        previewSurface = null;
-
-        try {
-            // 准备Surface列表
-            List<Surface> surfaces = new ArrayList<>();
-
-            // 预览Surface
-            synchronized (surfaceLock) {
-                if (surfaceTexture == null) {
-                    handleCameraError(ERROR_CAMERA_DEVICE);
-                    return;
-                }
-
-                surfaceTexture.setDefaultBufferSize(pushWidth, pushHeight);
-                previewSurface = new Surface(surfaceTexture);
-                surfaces.add(previewSurface);
-            }
-
-            // 推流Surface
-            try {
-                Surface pushSurface = videoPusher.getInputSurface();
-                surfaces.add(pushSurface);
-            } catch (IllegalStateException e) {
-                handleCameraError(SURFACE_TIMEOUT);
-                return;
-            }
-
-            // 录制Surface
-            try {
-                Surface recordingSurface = videoRecorder.getInputSurface();
-                surfaces.add(recordingSurface);
-            } catch (IllegalStateException e) {
-                handleCameraError(SURFACE_TIMEOUT);
-                return;
-            }
-
-            // 创建CaptureRequest构建器
-            CaptureRequest.Builder requestBuilder = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_RECORD);
-            // 添加预览Surface
-            if (previewSurface != null) {
-                requestBuilder.addTarget(previewSurface);
-            } else {
-                handleCameraError(ERROR_CAMERA_DEVICE);
-                return;
-            }
-
-            // 配置公共参数
-            Range<Integer> fpsRange = getFpsRange(targetFps);
-            requestBuilder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, fpsRange);
-
-            // 配置防抖模式
-            configureStabilization(requestBuilder, pushStabMode, recordStabMode);
-
-            // 添加所有Surface
-            for (Surface surface : surfaces) {
-                requestBuilder.addTarget(surface);
-            }
-
-            // 预览方向
-            runOnUiThread(() -> textureView.setRotation(270));
-
-            // 计算正确的宽高比
-            float aspectRatio = (float) pushHeight / pushWidth;
-
-            // 更新布局参数
-            textureView.post(() -> {
-                ViewGroup parent = (ViewGroup) textureView.getParent();
-                int viewWidth = parent.getWidth();
-                int viewHeight = parent.getHeight();
-
-                // 计算适配后的尺寸
-                int targetWidth, targetHeight;
-                targetWidth = viewHeight;
-                targetHeight = (int) (viewHeight / aspectRatio);
-
-                // 设置居中布局参数
-                FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
-                        targetWidth,
-                        targetHeight
-                );
-                params.gravity = Gravity.CENTER;
-                textureView.setLayoutParams(params);
-
-                    // 延迟显示确保布局完成
-                    new Handler().postDelayed(() ->
-                            textureView.setVisibility(View.VISIBLE), 100);
-                });
-
-
-            // 创建摄像头会话
-            cameraDevice.createCaptureSession(surfaces, new CameraCaptureSession.StateCallback() {
-                @Override
-                public void onConfigured(@NonNull CameraCaptureSession session) {
-                    cameraCaptureSession = session;
-                    try {
-                        session.setRepeatingRequest(requestBuilder.build(), null, cameraHandler);
-                        currentPushFps.set(fpsRange.getUpper());
-                        currentRecordFps.set(fpsRange.getUpper());
-
-                        Timber.tag(TAGCamera).i("摄像头初始化成功");
-                        checker.onStarted(onStartedCheck.StartPart.CAMERA, true);
-
-                        cameraCaptureSession.setRepeatingRequest(requestBuilder.build(),
-                                new CameraCaptureSession.CaptureCallback() {
-                                    @Override
-                                    public void onCaptureCompleted(@NonNull CameraCaptureSession session,
-                                                                   @NonNull CaptureRequest request,
-                                                                   @NonNull TotalCaptureResult result) {
-                                        // 记录采集时间戳（纳秒）
-                                        long captureTimeNs = System.nanoTime();
-                                        FFmpegPusher.PushStatistics.reportTimestamp(FFmpegPusher.PushStatistics.TimeStampStyle.Captured
-                                                , captureTimeNs);
-                                    }
-                                },
-                                cameraHandler
-                        );
-                    } catch (CameraAccessException e) {
-                        handleCameraError(ERROR_CAMERA_SERVICE);
-                    }
-                }
-
-                @Override
-                public void onConfigureFailed(@NonNull CameraCaptureSession session) {
-                    handleCameraError(ERROR_CAMERA_DEVICE);
-                }
-
-            }, cameraHandler);
-        } catch (CameraAccessException e) {
-            handleCameraError(ERROR_CAMERA_SERVICE);
-        }
-    }
-
-    // 防抖配置方法
-    private void configureStabilization(CaptureRequest.Builder builder,
-                                        StabilizationMode pushMode,
-                                        StabilizationMode recordMode) {
-        try {
-            CameraManager manager = (CameraManager) getSystemService(Context.CAMERA_SERVICE);
-            CameraCharacteristics characteristics = manager.getCameraCharacteristics(cameraId);
-
-            // 获取设备支持情况
-            int[] videoStabModes = characteristics.get(
-                    CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES);
-            boolean eisSupported = Arrays.stream(videoStabModes).anyMatch(
-                    m -> m == CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON);
-
-            int[] oisModes = characteristics.get(
-                    CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION);
-            boolean oisSupported = Arrays.stream(oisModes).anyMatch(
-                    m -> m == CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON);
-
-            // OIS全局配置（任一模式请求即开启）
-            boolean enableOIS = (pushMode == StabilizationMode.OIS_ONLY ||
-                    pushMode == StabilizationMode.HYBRID ||
-                    recordMode == StabilizationMode.OIS_ONLY
-                    || recordMode == StabilizationMode.HYBRID) && oisSupported;
-
-
-            // EIS全局配置（任一模式请求即开启）
-            boolean enableEIS = (pushMode == StabilizationMode.EIS_ONLY ||
-                    pushMode == StabilizationMode.HYBRID ||
-                    recordMode == StabilizationMode.EIS_ONLY
-                    || recordMode == StabilizationMode.HYBRID) && eisSupported;
-
-            // 应用配置
-            applyStabilization(builder, enableOIS , enableEIS);
-
-            // 记录实际生效模式
-            currentPushStabMode.set(calcEffectiveMode(enableOIS , enableEIS));
-            currentRecordStabMode.set(calcEffectiveMode(enableOIS, enableEIS));
-
-        } catch (CameraAccessException e) {
-            handleCameraError(ERROR_CAMERA_SERVICE);
-        }
-    }
-
-    private StabilizationMode calcEffectiveMode(boolean oisEnabled, boolean eisEnabled) {
-        if (oisEnabled && eisEnabled) return StabilizationMode.HYBRID;
-        if (oisEnabled) return StabilizationMode.OIS_ONLY;
-        if (eisEnabled) return StabilizationMode.EIS_ONLY;
-        return StabilizationMode.OFF;
-    }
-
-    private void applyStabilization(CaptureRequest.Builder builder,
-                                    boolean enableOIS,
-                                    boolean enableEIS) {
-        // OIS配置（全局生效）
-        builder.set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
-                enableOIS ? CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON
-                        : CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF);
-
-        // OIS配置（全局生效）
-        if (enableEIS) {
-            builder.set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
-                    CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON);
-        }
-    }
-
-    // 错误处理方法
-    private void handleCameraError(int errorCode) {
-        String errorDesc;
-        switch (errorCode) {
-            case ERROR_CAMERA_IN_USE:
-                errorDesc = "摄像头被其他进程占用";
-                break;
-            case ERROR_MAX_CAMERAS_IN_USE:
-                errorDesc = "达到最大摄像头使用数";
-                break;
-            case ERROR_CAMERA_DEVICE:
-                errorDesc = "摄像头硬件故障";
-                break;
-            case ERROR_CAMERA_DISABLED:
-                errorDesc = "摄像头被管理员禁用";
-                break;
-            case ERROR_CAMERA_SERVICE:
-                errorDesc = "摄像头服务异常";
-                break;
-            case SURFACE_TIMEOUT:
-                errorDesc = "Surface准备超时";
-                break;
-            default:
-                errorDesc = "未知错误";
-        }
-
-        Timber.tag(TAGCamera).e("摄像头错误[%d]: %s", errorCode, errorDesc);
-        setState(WorkflowState.ERROR);
-        checker.onStarted(onStartedCheck.StartPart.CAMERA, false);
-        Stop();
-    }
-
-    // 停止摄像头
-    private void stopCamera() {
-        try {
-            // 释放预览Surface
-            if (previewSurface != null) {
-                previewSurface.release();
-                previewSurface = null;
-            }
+            workflow.stop();
 
             runOnUiThread(() -> {
-                if (textureView != null) {
-                    textureView.setVisibility(View.GONE);
-                }
+                btnStart.setEnabled(true);
+                btnStop.setEnabled(false);
             });
-
-            // 释放资源
-            if (cameraCaptureSession != null) {
-                cameraCaptureSession.abortCaptures();
-                cameraCaptureSession.close();
-                cameraCaptureSession = null;
-            }
-
-            if (cameraDevice != null) {
-                cameraDevice.close();
-                cameraDevice = null;
-            }
-
-            if (cameraHandler != null) {
-                cameraHandler.getLooper().quitSafely();
-                cameraHandler = null;
-            }
         } catch (Exception e) {
-            Timber.e("摄像头关闭失败:%s", e.getMessage());
+            Timber.tag(TAG).e("工作流停止出错：%s",e.getMessage());
         }
     }
 
-
-    ////////////////////////////////////////////////////////////////////////////////////////
-                                  //权限请求部分//***&&
     private boolean checkCameraPermission() {
         return ContextCompat.checkSelfPermission(
                 this,
@@ -974,109 +180,12 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
             //检查结果数组是否非空
             if (grantResults.length > 0) {
                 if (grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                    setPermitted(true);// 权限通过
+                    isPermitted.set(true);// 权限通过
                     Timber.tag(TAG).i("camera权限通过");
                 } else {
                     Timber.tag(TAG).i("camera权限被拒");// 权限被拒
                 }
             }
-        }
-    }
-
-    /////////////////////////////////////////////////////////////////////////////////////////
-                                  //推流与录制事件处理部分//***&&
-
-    private void setupEventHandlers() {
-        Disposable disposable = videoPusher.getReportSubject()
-                .observeOn(AndroidSchedulers.mainThread())
-                .subscribe(report -> {
-                    switch (report.type) {
-                        case PUSH_STARTED:
-                            handlePushStart(report);
-                            break;
-                        case PUSH_STOPPED:
-                            handlePushStop(report);
-                            break;
-                        case ERROR:
-                            handleError(report);
-                            break;
-                        case Statistics:
-                            handleStatistics(report);
-                            break;
-                        case RECONNECTION:
-                            handleReconnection(report);
-                            break;
-                    }
-                });
-        compositeDisposable.add(disposable);
-
-        Disposable recorddisposable = videoRecorder.getReportSubject()
-                .observeOn(AndroidSchedulers.mainThread())
-                .subscribe(report -> {
-                    switch (report.type) {
-                        case ERROR:
-                            handleRecordError(report);
-                            break;
-                        case STARTED:
-                            handleRecordStart(report);
-                            break;
-                    }
-                });
-        compositeDisposable.add(recorddisposable);
-    }
-
-    private void handlePushStart(VideoPusher.PushReport report) {
-        Timber.tag(TAG).i("推流已开始");
-        checker.onStarted(onStartedCheck.StartPart.PUSH, true);
-    }
-
-    private void handlePushStop(VideoPusher.PushReport report) {
-        Timber.tag(TAG).i(report.message);
-    }
-
-    private void handleError(VideoPusher.PushReport report) {
-        String errormsg = report.message;
-        int errorcode = report.code;
-        Timber.tag(TAG).e("推流出错,代码：%d,消息：%s",errorcode,errormsg);
-        setState(WorkflowState.ERROR);
-        checker.onStarted(onStartedCheck.StartPart.PUSH, false);
-        Stop();
-    }
-
-    private void handleReconnection(VideoPusher.PushReport report) {
-        Timber.tag(TAG).e(report.message);
-    }
-
-    private void handleStatistics(VideoPusher.PushReport report) {
-        int dropRate = (int)report.pushFailureRate * 100;
-        Timber.tag(TAG).i("推流统计回调：当前码率：%dkbps; 网络延迟rtt：%dms; " +
-                        "丢包率：%d%%; 推流总延迟：%dms",report.BitrateNow, report.rtt, dropRate, report.totalLatency);
-    }
-
-    private void handleRecordError(VideoRecorder.RecordReport report)
-    {
-        String errormsg = report.message;
-        int errorcode = report.code;
-        Timber.tag(TAG).e("录制出错,代码：%d,消息：%s",errorcode,errormsg);
-        setState(WorkflowState.ERROR);
-        checker.onStarted(onStartedCheck.StartPart.RECORD, false);
-        Stop();
-    }
-
-    private void handleRecordStart(VideoRecorder.RecordReport report)
-    {
-        Timber.tag(TAG).i("录制启动成功");
-        checker.onStarted(onStartedCheck.StartPart.RECORD, true);
-    }
-
-    public boolean isPermitted() {
-        synchronized (checkPermissionLock) {
-            return isPermitted;
-        }
-    }
-    private void setPermitted(boolean permitted) {
-        synchronized (checkPermissionLock) {
-            isPermitted = permitted;
         }
     }
 
@@ -1115,35 +224,11 @@ private final TextureView.SurfaceTextureListener surfaceTextureListener =
     @Override
     protected void onPause() {
         super.onPause();
-        Stop();
     }
 
     @Override
     protected void onDestroy() {
-        try {
-            Stop();
-            if (surfaceTexture != null) {
-                surfaceTexture.release();
-                surfaceTexture = null;
-            }
-            if (previewSurface != null) {
-                previewSurface.release();
-                previewSurface = null;
-            }
-            if (compositeDisposable != null && !compositeDisposable.isDisposed()) {
-                compositeDisposable.dispose();
-                compositeDisposable.clear(); // 强制清理所有订阅
-            }
-        } catch (Exception e) {}
-        //释放RxJava资源
-        if (compositeDisposable != null && !compositeDisposable.isDisposed()) {
-            compositeDisposable.dispose();
-        }
-
-        // 关闭线程池
-        if (globalErrorHandler != null) {
-            globalErrorHandler.shutdownNow();
-        }
+        workflow.destroy();
         super.onDestroy();
     }
 }

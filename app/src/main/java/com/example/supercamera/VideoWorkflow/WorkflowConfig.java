@@ -13,6 +13,7 @@ import com.example.supercamera.VideoStreamer.StreamConfig;
 
 public class WorkflowConfig {
     public final String url;
+    public final String recordPath;
     public final Size pushSize;
     public final Size recordSize;
     public final int fps;
@@ -30,6 +31,7 @@ public class WorkflowConfig {
 
     private WorkflowConfig(Builder builder) {
         this.url = builder.url;
+        this.recordPath = builder.recordPath;
         this.pushSize = builder.pushSize;
         this.recordSize = builder.recordSize;
         this.fps = builder.fps;
@@ -49,7 +51,7 @@ public class WorkflowConfig {
                 .build();
 
         this.recorderConfig =
-                new RecorderConfig.Builder(recordSize.getWidth(), recordSize.getHeight())
+                new RecorderConfig.Builder(recordSize.getWidth(), recordSize.getHeight(), recordPath)
                         .setBitrate(recordBitrateKbps)
                         .setMimeType(encoderFormat)
                         .setIFrameInterval(iFrameInterval)
@@ -68,6 +70,7 @@ public class WorkflowConfig {
     // Builder内部类
     public static class Builder {
         private String url;
+        public String recordPath;
         private Size pushSize;
         private Size recordSize;
         private int fps = 30;
@@ -80,10 +83,11 @@ public class WorkflowConfig {
         private int stabilizationMode = Stab_OFF;
         private int cameraFacing = Camera_Facing_BACK;
 
-        public Builder(Size pushSize, Size recordSize, String url) {
+        public Builder(Size pushSize, Size recordSize, String url, String recordPath) {
             this.url = url;
             this.pushSize = pushSize;
             this.recordSize = recordSize;
+            this.recordPath = recordPath;
         }
 
         public Builder setFps(int fps) {
