@@ -11,6 +11,7 @@ import static com.example.supercamera.VideoStreamer.ErrorCode.ERROR_Stream_CONFI
 import static com.example.supercamera.VideoStreamer.ErrorCode.ERROR_Stream_START;
 import static com.example.supercamera.VideoStreamer.ErrorCode.ERROR_Stream_STOP;
 import static com.example.supercamera.VideoStreamer.StreamState.StreamStateEnum.CONFIGURED;
+import static com.example.supercamera.VideoStreamer.StreamState.StreamStateEnum.DESTROYED;
 import static com.example.supercamera.VideoStreamer.StreamState.StreamStateEnum.ERROR;
 import static com.example.supercamera.VideoStreamer.StreamState.StreamStateEnum.READY;
 import static com.example.supercamera.VideoStreamer.StreamState.StreamStateEnum.STARTING;
@@ -81,7 +82,9 @@ public class VideoStreamerImpl implements VideoStreamer {
 
     @Override
     public void setTimeStampQueue(PublishSubject<TimeStamp> timeStampQueue) {
-        this.CaptureTimeStampQueue = timeStampQueue;
+        synchronized (publicLock) {
+            this.CaptureTimeStampQueue = timeStampQueue;
+        }
     }
 
     // throw MyException
@@ -141,9 +144,12 @@ public class VideoStreamerImpl implements VideoStreamer {
 
     @Override
     public void destroy() {
-        mPusher.destroy();
-        mVideoEncoder.destroy();
-        cleanResource();
+        synchronized (publicLock) {
+            mPusher.destroy();
+            mVideoEncoder.destroy();
+            cleanResource();
+            state.setState(DESTROYED);
+        }
     }
 
 
@@ -268,7 +274,7 @@ public class VideoStreamerImpl implements VideoStreamer {
 
     private void cleanResource() {
         if(report != null) {
-            report.shutdown();
+            report.shutdownNow();
         }
     }
 
@@ -285,7 +291,6 @@ public class VideoStreamerImpl implements VideoStreamer {
         if(msg != null) {
             throw throwException(ILLEGAL_ARGUMENT, ERROR_Stream_CONFIG, msg);
         }
-
     }
 
     private MyException throwException(int type, int code, String message) {

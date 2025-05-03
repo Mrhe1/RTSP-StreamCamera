@@ -21,6 +21,7 @@ import com.example.supercamera.MyException.MyException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import timber.log.Timber;
 
@@ -28,7 +29,7 @@ public class MediaCodecImpl implements VideoEncoder {
     private MyEncoderConfig mConfig;
     private EncoderListener mListener;
     private MediaCodec mMediaCodec;
-    private Surface mInputSurface;
+    private final AtomicReference<Surface> mInputSurface = new AtomicReference<>();
     private final Object onErrorLock = new Object();
     private final Object publicLock = new Object();
     private final ExecutorService mEncoderExecutor = Executors.newSingleThreadExecutor();
@@ -38,13 +39,13 @@ public class MediaCodecImpl implements VideoEncoder {
 
     @Override
     public void configure(MyEncoderConfig config) {
-        if (onError.get()) {
-            Timber.tag(TAG).e("ILLEGAL_STATE,目前状态onError");
-            throw throwException(ILLEGAL_STATE,ERROR_CODEC_CONFIG,
-                    "ILLEGAL_STATE,目前状态onError");
-        }
-
         synchronized (publicLock) {
+            if (onError.get()) {
+                Timber.tag(TAG).e("ILLEGAL_STATE,目前状态onError");
+                throw throwException(ILLEGAL_STATE,ERROR_CODEC_CONFIG,
+                        "ILLEGAL_STATE,目前状态onError");
+            }
+
             mConfig = config;
             try {
                 // 创建带Looper的HandlerThread
@@ -62,9 +63,6 @@ public class MediaCodecImpl implements VideoEncoder {
                     @Override
                     public void onInputBufferAvailable(@NonNull MediaCodec codec, int index) {
                         // Surface模式下无需处理输入缓冲区
-                        if (mConfig.colorFormat ==
-                                MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface) return;
-
                         if (mListener != null) {
                             mListener.onInputBufferAvailable(codec, index);
                         }
@@ -102,10 +100,10 @@ public class MediaCodecImpl implements VideoEncoder {
                 }, codecHandler);
 
                 // 创建输入Surface
-                mInputSurface = mMediaCodec.createInputSurface();
+                mInputSurface.set(mMediaCodec.createInputSurface());
                 reportExecutor.submit(() -> {
                     if (mListener != null) {
-                        mListener.onSurfaceAvailable(mInputSurface);
+                        mListener.onSurfaceAvailable(mInputSurface.get());
                     }
                 });
 
@@ -119,14 +117,15 @@ public class MediaCodecImpl implements VideoEncoder {
 
     @Override
     public void start() {
-        if (onError.get()) {
-            Timber.tag(TAG).e("ILLEGAL_STATE,目前状态onError");
-            throw throwException(ILLEGAL_STATE,ERROR_CODEC_START,
-                    "ILLEGAL_STATE,目前状态onError");
-        }
-
         synchronized (publicLock) {
+            if (onError.get()) {
+                Timber.tag(TAG).e("ILLEGAL_STATE,目前状态onError");
+                throw throwException(ILLEGAL_STATE,ERROR_CODEC_START,
+                        "ILLEGAL_STATE,目前状态onError");
+            }
+
             mEncoderExecutor.submit(() -> {
+                Timber.tag(TAG).d("启动编码器");
                 try {
                     if (mMediaCodec != null) {
                         mMediaCodec.start();
@@ -158,9 +157,11 @@ public class MediaCodecImpl implements VideoEncoder {
                 if (mMediaCodec != null) {
                     mMediaCodec.stop();
                     mMediaCodec.release();
+                    mMediaCodec = null;
                 }
                 if (mInputSurface != null) {
-                    mInputSurface.release();
+                    mInputSurface.get().release();
+                    mInputSurface.set(null);
                 }
             } catch (Exception e) {
                 Timber.tag(TAG).e(e, "停止codec出错");
@@ -177,7 +178,7 @@ public class MediaCodecImpl implements VideoEncoder {
                     mEncoderExecutor.shutdown();
                 }
                 if (reportExecutor != null) {
-                    reportExecutor.shutdown();
+                    reportExecutor.shutdownNow();
                 }
             } catch (Exception ignored) {
             }
@@ -231,14 +232,14 @@ public class MediaCodecImpl implements VideoEncoder {
                 mMediaCodec.release();
             }
             if (mInputSurface != null) {
-                mInputSurface.release();
+                mInputSurface.get().release();
             }
 
             if (mEncoderExecutor != null) {
                 mEncoderExecutor.shutdown();
             }
             if (reportExecutor != null) {
-                reportExecutor.shutdown();
+                reportExecutor.shutdownNow();
             }
         } catch (Exception ignored) {}
     }
@@ -249,7 +250,7 @@ public class MediaCodecImpl implements VideoEncoder {
                 mMediaCodec.release();
             }
             if (mInputSurface != null) {
-                mInputSurface.release();
+                mInputSurface.get().release();
             }
 
             if (mEncoderExecutor != null) {

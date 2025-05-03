@@ -74,7 +74,7 @@ public class MyEncoderConfig {
             this.height = height;
         }
 
-        public Builder setBitrate(int bitrateKbps) {
+        public Builder setKBitrate(int bitrateKbps) {
             this.bitrate = bitrateKbps * 1000; // 转换为bps
             return this;
         }

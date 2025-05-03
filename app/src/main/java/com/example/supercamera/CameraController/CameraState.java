@@ -6,7 +6,7 @@ import timber.log.Timber;
 
 public class CameraState {
     private static final String TAG = "CameraState";
-    public final AtomicReference<CameraStateEnum> currentState =
+    private final AtomicReference<CameraStateEnum> currentState =
             new AtomicReference<>(CameraStateEnum.READY);
 
     public enum CameraStateEnum {
@@ -15,7 +15,8 @@ public class CameraState {
         OPENING,
         PREVIEWING,
         ERROR,
-        CLOSING
+        CLOSING,
+        DESTROYED // 已销毁
     }
 
     public boolean setState(CameraStateEnum newState) {
@@ -46,6 +47,7 @@ public class CameraState {
                     newState == CameraStateEnum.READY;
             case CLOSING -> newState == CameraStateEnum.READY ||
                     newState == CameraStateEnum.ERROR;
+            case DESTROYED -> true;
         };
     }
 }

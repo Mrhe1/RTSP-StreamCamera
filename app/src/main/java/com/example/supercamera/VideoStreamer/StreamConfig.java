@@ -46,7 +46,7 @@ public class StreamConfig {
 
         // 自动构建MyEncoderConfig
         this.encoderConfig = new MyEncoderConfig.Builder(this.width, this.height)
-                .setBitrate(this.bitrateKbps) // 直接传入kbps
+                .setKBitrate(this.bitrateKbps) // 直接传入kbps
                 .setFps(this.fps)
                 .setIFrameInterval(this.iFrameInterval)
                 .setColorFormat(MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)

@@ -29,6 +29,7 @@ import timber.log.Timber;
 public class VideoRecorderImpl implements VideoRecorder {
     private final RecorderState state = new RecorderState();
     private static final String TAG = "VideoRecorder";
+    private final Object publicLock = new Object();
     private final Object muxerLock = new Object();
     private final Object encoderLock = new Object();
     private final Object errorLock = new Object();
@@ -44,122 +45,133 @@ public class VideoRecorderImpl implements VideoRecorder {
 
     @Override
     public void configure(RecorderConfig config) {
-        if (state.getState() != READY && state.getState() != CONFIGURED) {
-            String msg = String.format("configure failed, current state: %s",
-                    state.getState().toString());
-            Timber.tag(TAG).e(msg);
-            throw throwException(ILLEGAL_STATE, ERROR_Recorder_CONFIG, msg);
-        }
-
-        try {
-            // 转换配置到EncoderConfig
-            MyEncoderConfig encoderConfig = new MyEncoderConfig.Builder(config.width, config.height)
-                    .setFps(config.fps)
-                    .setIFrameInterval(config.iFrameInterval)
-                    .setBitrate(config.bitrate) // 4Mbps
-                    .setProfile(config.profile)
-                    .setMimeType(config.mimeType)
-                    .setColorFormat(MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-                    .build();
-
-            // 初始化编码器
-            synchronized (encoderLock) {
-                mVideoEncoder.configure(encoderConfig);
-                mVideoEncoder.setEncoderListener(new EncoderListener() {
-                    @Override
-                    public void onError(MyException e) {
-                        notifyError(e,0,0,null);
-                    }
-
-                    @Override
-                    public void onStart(MediaCodec codec, MediaFormat format) {
-                        setupMuxer(format);
-                        state.setState(RECORDING);
-                        if (mListener != null) mListener.onStart();
-                    }
-
-                    @Override
-                    public void onSurfaceAvailable(Surface surface) {
-                        mInputSurface = surface;
-                        if (mListener != null) {
-                            mListener.onSurfaceAvailable(surface);
-                        }
-                    }
-
-                    @Override
-                    public void onOutputBufferAvailable(MediaCodec codec, int index,
-                                                        MediaCodec.BufferInfo info) {
-                        handleEncodedData(codec, index, info);
-                    }
-
-                    @Override
-                    public void onInputBufferAvailable(MediaCodec codec, int index) {
-                        // Surface模式无需处理
-                    }
-                });
-
-                mMediaMuxer = new MediaMuxer(config.path, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
+        synchronized (publicLock) {
+            if (state.getState() != READY && state.getState() != CONFIGURED) {
+                String msg = String.format("configure failed, current state: %s",
+                        state.getState().toString());
+                Timber.tag(TAG).e(msg);
+                throw throwException(ILLEGAL_STATE, ERROR_Recorder_CONFIG, msg);
             }
 
-            state.setState(CONFIGURED);
-        } catch (Exception e) {
-            Timber.tag(TAG).e(e, "Encoder configuration failed");
-            throw throwException(ILLEGAL_STATE, ERROR_Recorder_CONFIG, e.getMessage());
+            try {
+                // 转换配置到EncoderConfig
+                MyEncoderConfig encoderConfig = new MyEncoderConfig.Builder(config.width, config.height)
+                        .setFps(config.fps)
+                        .setIFrameInterval(config.iFrameInterval)
+                        .setKBitrate(config.bitrate) // 单位kbps
+                        .setProfile(config.profile)
+                        .setMimeType(config.mimeType)
+                        .setColorFormat(MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+                        .build();
+
+                // 初始化编码器
+                synchronized (encoderLock) {
+                    mVideoEncoder.configure(encoderConfig);
+                    mVideoEncoder.setEncoderListener(new EncoderListener() {
+                        @Override
+                        public void onError(MyException e) {
+                            notifyError(e, 0, 0, null);
+                        }
+
+                        @Override
+                        public void onStart(MediaCodec codec, MediaFormat format) {
+                            setupMuxer(format);
+                            state.setState(RECORDING);
+                            if (mListener != null) mListener.onStart();
+                        }
+
+                        @Override
+                        public void onSurfaceAvailable(Surface surface) {
+                            mInputSurface = surface;
+                            if (mListener != null) {
+                                mListener.onSurfaceAvailable(surface);
+                            }
+                        }
+
+                        @Override
+                        public void onOutputBufferAvailable(MediaCodec codec, int index,
+                                                            MediaCodec.BufferInfo info) {
+                            handleEncodedData(codec, index, info);
+                        }
+
+                        @Override
+                        public void onInputBufferAvailable(MediaCodec codec, int index) {
+                            // Surface模式无需处理
+                        }
+                    });
+
+                    // 初始化muxer
+                    mMediaMuxer = new MediaMuxer(config.path, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
+                }
+
+                state.setState(CONFIGURED);
+            } catch (Exception e) {
+                Timber.tag(TAG).e(e, "Encoder configuration failed");
+                throw throwException(ILLEGAL_STATE, ERROR_Recorder_CONFIG, e.getMessage());
+            }
         }
     }
 
     @Override
     public void start() {
-        if (state.getState() != CONFIGURED) {
-            String msg = String.format("start failed, current state: %s",
-                    state.getState().toString());
-            Timber.tag(TAG).e(msg);
-            throw throwException(ILLEGAL_STATE, ERROR_Recorder_START, msg);
-        }
+        synchronized (publicLock) {
+            if (state.getState() != CONFIGURED) {
+                String msg = String.format("start failed, current state: %s",
+                        state.getState().toString());
+                Timber.tag(TAG).e(msg);
+                throw throwException(ILLEGAL_STATE, ERROR_Recorder_START, msg);
+            }
 
-        state.setState(STARTING);
+            state.setState(STARTING);
 
-        try {
-            mVideoEncoder.start();
-        } catch (MyException e) {
-            state.setState(CONFIGURED);
-            throw e;
+            try {
+                mVideoEncoder.start();
+            } catch (MyException e) {
+                state.setState(CONFIGURED); // 状态回退
+                throw e;
+            }
         }
     }
 
     @Override
     public void stop() {
-        if (state.getState() != RECORDING) {
-            String msg = String.format("stop failed, current state: %s",
-                    state.getState().toString());
-            Timber.tag(TAG).e(msg);
-            throw throwException(ILLEGAL_STATE, ERROR_Recorder_STOP, msg);
-        }
-
-        state.setState(STOPPING);
-        try {
-            mVideoEncoder.stop();
-            releaseMuxer();
-            if (mInputSurface != null) {
-                mInputSurface.release();
+        synchronized (publicLock) {
+            if (state.getState() != RECORDING) {
+                String msg = String.format("stop failed, current state: %s",
+                        state.getState().toString());
+                Timber.tag(TAG).e(msg);
+                throw throwException(ILLEGAL_STATE, ERROR_Recorder_STOP, msg);
             }
-            state.setState(READY);
-        } catch (MyException e) {
-            if(e.getExceptionType() == ILLEGAL_STATE) {
-                state.setState(RECORDING);
-            }else {
-                notifyError(e, 0, ERROR_Recorder_STOP, null);
+
+            state.setState(STOPPING);
+            try {
+                mVideoEncoder.stop();
+                releaseMuxer();
+                if (mInputSurface != null) {
+                    mInputSurface.release();
+                    mInputSurface = null;
+                }
+                state.setState(READY);
+            } catch (MyException e) {
+                if (e.getExceptionType() == ILLEGAL_STATE) {
+                    state.setState(RECORDING);
+                } else {
+                    notifyError(e, 0, ERROR_Recorder_STOP, null);
+                }
             }
         }
     }
 
     @Override
     public void destroy() {
-        try {
-            mVideoEncoder.destroy();
-            releaseMuxer();
-            releaseResource();
-        } catch (Exception ignored) {
+        synchronized (publicLock) {
+            try {
+                mVideoEncoder.destroy();
+                releaseMuxer();
+                releaseResource();
+                state.setState(DESTROYED);
+            } catch (Exception ignored) {
+            }
         }
     }
 
@@ -214,13 +226,16 @@ public class VideoRecorderImpl implements VideoRecorder {
         synchronized (muxerLock) {
             if (mMediaMuxer != null) {
                 try {
-                    if (mIsMuxerStarted.get()) mMediaMuxer.stop();
-                    mMediaMuxer.release();
+                    if (mIsMuxerStarted.get()) {
+                        mMediaMuxer.stop();
+                        mMediaMuxer.release();
+                    }
                 } catch (Exception e) {
                     Timber.tag(TAG).e(e, "Muxer release failed");
+                }finally {
+                    mMediaMuxer = null;
+                    mIsMuxerStarted.set(false);
                 }
-                mMediaMuxer = null;
-                mIsMuxerStarted.set(false);
             }
         }
     }

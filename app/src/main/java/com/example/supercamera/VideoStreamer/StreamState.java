@@ -14,7 +14,8 @@ public class StreamState {
         STARTING,
         StartPUSHING,
         STREAMING,
-        STOPPING
+        STOPPING,
+        DESTROYED //已销毁
     }
 
     // 处理工作状态转换
@@ -44,8 +45,8 @@ public class StreamState {
             case StartPUSHING -> newState == StreamStateEnum.ERROR || newState == StreamStateEnum.STREAMING;
             case STREAMING -> newState == StreamStateEnum.ERROR || newState == StreamStateEnum.STOPPING;
             case ERROR -> newState == StreamStateEnum.STOPPING || newState == StreamStateEnum.READY;
-            case STOPPING -> newState == StreamStateEnum.READY || newState == StreamStateEnum.ERROR
-                                || newState == StreamStateEnum.STREAMING;
+            case STOPPING -> newState == StreamStateEnum.READY || newState == StreamStateEnum.ERROR;
+            case DESTROYED -> true;
         };
     }
 }

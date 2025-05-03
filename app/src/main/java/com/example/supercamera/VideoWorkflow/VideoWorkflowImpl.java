@@ -331,7 +331,7 @@ public class VideoWorkflowImpl implements VideoWorkflow {
             stop();
 
             if(reportExecutor != null) {
-                reportExecutor.shutdown();
+                reportExecutor.shutdownNow();
             }
 
             state.setState(DESTROYED);

@@ -10,6 +10,7 @@ import static com.example.supercamera.CameraController.CameraConfig.Stab_OFF;
 import static com.example.supercamera.CameraController.CameraConfig.Stab_OIS_ONLY;
 import static com.example.supercamera.CameraController.CameraState.CameraStateEnum.CLOSING;
 import static com.example.supercamera.CameraController.CameraState.CameraStateEnum.CONFIGURE;
+import static com.example.supercamera.CameraController.CameraState.CameraStateEnum.DESTROYED;
 import static com.example.supercamera.CameraController.CameraState.CameraStateEnum.ERROR;
 import static com.example.supercamera.CameraController.CameraState.CameraStateEnum.OPENING;
 import static com.example.supercamera.CameraController.CameraState.CameraStateEnum.PREVIEWING;
@@ -197,6 +198,7 @@ public class CameraImpl implements CameraController {
             try{
                 stop();
                 cleanRecourse();
+                state.setState(DESTROYED);
             } catch (Exception ignored) {}
         }
     }
@@ -439,7 +441,7 @@ public class CameraImpl implements CameraController {
     private void cleanRecourse() {
         try {
             if (reportExecutor != null) {
-                reportExecutor.shutdown();
+                reportExecutor.shutdownNow();
             }
         } catch (Exception ignored) {}
     }

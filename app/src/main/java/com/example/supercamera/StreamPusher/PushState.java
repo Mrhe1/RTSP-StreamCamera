@@ -5,7 +5,7 @@ import timber.log.Timber;
 
 public class PushState {
         private static final String TAG = "PushState";
-        public final AtomicReference<PushStateEnum> currentState =
+        private final AtomicReference<PushStateEnum> currentState =
                 new AtomicReference<>(PushStateEnum.READY);
         public enum PushStateEnum {
                 READY,
@@ -14,7 +14,8 @@ public class PushState {
                 RECONNECTING,
                 STARTING,
                 PUSHING,
-                STOPPING
+                STOPPING,
+                DESTROYED // 已销毁
         }
 
         // 处理工作状态转换
@@ -46,7 +47,7 @@ public class PushState {
                                 || newState == PushStateEnum.STOPPING;
                         case ERROR -> newState == PushStateEnum.STOPPING || newState == PushStateEnum.READY;
                         case STOPPING -> newState == PushStateEnum.READY || newState == PushStateEnum.ERROR;
-                        default -> false;
+                        case DESTROYED -> true;
                 };
         }
 }

@@ -6,7 +6,7 @@ import timber.log.Timber;
 
 public class RecorderState {
     private static final String TAG = "RecorderState";
-    public final AtomicReference<RecorderStateEnum> currentState =
+    private final AtomicReference<RecorderStateEnum> currentState =
             new AtomicReference<>(RecorderStateEnum.READY);
     public enum RecorderStateEnum {
         READY,
@@ -14,7 +14,8 @@ public class RecorderState {
         ERROR,
         STARTING,
         RECORDING,
-        STOPPING
+        STOPPING,
+        DESTROYED // 已销毁
     }
 
     // 处理工作状态转换
@@ -37,14 +38,13 @@ public class RecorderState {
         RecorderStateEnum current = currentState.get();
         return switch (current) {
             case READY -> newState == RecorderStateEnum.CONFIGURED || newState == RecorderStateEnum.ERROR;
-            case STARTING -> newState == RecorderStateEnum.ERROR || newState == RecorderStateEnum.RECORDING
-                                || newState == RecorderStateEnum.CONFIGURED;
+            case STARTING -> newState == RecorderStateEnum.ERROR || newState == RecorderStateEnum.CONFIGURED;
             case CONFIGURED -> newState == RecorderStateEnum.STARTING || newState == RecorderStateEnum.ERROR ||
                                 newState == RecorderStateEnum.CONFIGURED;
             case RECORDING -> newState == RecorderStateEnum.ERROR || newState == RecorderStateEnum.STOPPING;
             case ERROR -> newState == RecorderStateEnum.STOPPING || newState == RecorderStateEnum.READY;
             case STOPPING -> newState == RecorderStateEnum.READY || newState == RecorderStateEnum.ERROR;
-            default -> false;
+            case DESTROYED -> true;
         };
     }
 }

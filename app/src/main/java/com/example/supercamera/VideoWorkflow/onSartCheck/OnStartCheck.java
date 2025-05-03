@@ -1,7 +1,5 @@
 package com.example.supercamera.VideoWorkflow.onSartCheck;
 
-import com.example.supercamera.MainActivity;
-
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
@@ -99,7 +97,7 @@ public class OnStartCheck {
         for (int i = 0; i < isStarted.length(); i++) {
             int status = isStarted.get(i);
             Timber.tag(TAG).w("%s: %s",
-                    MainActivity.onStartedCheck.StartPart.values()[i].name(),
+                    StartPart.values()[i].name(),
                     status == 1 ? "成功" : status == -1 ? "失败" : "未完成"
             );
         }

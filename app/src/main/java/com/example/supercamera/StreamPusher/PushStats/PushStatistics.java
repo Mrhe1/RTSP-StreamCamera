@@ -32,7 +32,7 @@ public class PushStatistics {
     private final int pingIntervalSeconds;
     private final String url;
     private final double pushFailureRateSet;
-    List<PublishSubject<TimeStamp>> reportQueue = new ArrayList<>();
+    private final List<PublishSubject<TimeStamp>> reportQueue;
     private PushStatsListener listener;
     private final CompositeDisposable compositeDisposable = new CompositeDisposable();
     String TAG = "PushStatistics";
@@ -192,11 +192,11 @@ public class PushStatistics {
 
             //停止ping线程
             if (executor != null) {
-                executor.shutdown();
+                executor.shutdownNow();
             }
 
             if (reportExecutor != null) {
-                reportExecutor.shutdown();
+                reportExecutor.shutdownNow();
             }
         } catch (Exception e) {
             throw new RuntimeException(e);
@@ -242,10 +242,6 @@ public class PushStatistics {
 
     private void reportPushStatistics() {
         try {
-            if (PushState.getState() != PushState.PushStateEnum.PUSHING) {
-                return;
-            }
-
             // 计算错误帧和码率
             int ErrorFrameNum = 0;
             int size = 0;

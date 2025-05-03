@@ -10,6 +10,7 @@ import static com.example.supercamera.StreamPusher.ErrorCode.ERROR_FFmpeg_Reconn
 import static com.example.supercamera.StreamPusher.ErrorCode.ERROR_FFmpeg_START;
 import static com.example.supercamera.StreamPusher.ErrorCode.ERROR_FFmpeg_STOP;
 import static com.example.supercamera.StreamPusher.PushState.PushStateEnum.CONFIGURED;
+import static com.example.supercamera.StreamPusher.PushState.PushStateEnum.DESTROYED;
 import static com.example.supercamera.StreamPusher.PushState.PushStateEnum.ERROR;
 import static com.example.supercamera.StreamPusher.PushState.PushStateEnum.PUSHING;
 import static com.example.supercamera.StreamPusher.PushState.PushStateEnum.READY;
@@ -89,7 +90,6 @@ public class FFmpegPusherImpl implements StreamPusher {
     private int startCount = 0;
     private AVFormatContext outputContext;
     private AVStream videoStream;
-    private AVCodecParameters srcParams;
     private PushStatistics statistics;
     private PublishSubject<TimeStamp> pushReportQueue = PublishSubject.create();
     private ExecutorService reportExecutor = Executors.newSingleThreadExecutor();
@@ -107,7 +107,7 @@ public class FFmpegPusherImpl implements StreamPusher {
                 throw throwException(ILLEGAL_STATE, ERROR_FFmpeg_CONFIG, msg);
             }
 
-            if (config.url.startsWith("rtsp://")) {
+            if (!config.url.startsWith("rtsp://")) {
                 Timber.tag(TAG).e("URL必须以rtsp://开头");
                 throw throwException(ILLEGAL_ARGUMENT, ERROR_FFmpeg_CONFIG,
                         "URL必须以rtsp://开头");
@@ -131,7 +131,9 @@ public class FFmpegPusherImpl implements StreamPusher {
 
     @Override
     public void setTimeStampQueue(List<PublishSubject<TimeStamp>> timeStampQueue) {
-        mConfig.setTimeStampQueue(timeStampQueue);
+        synchronized (publicLock) {
+            mConfig.setTimeStampQueue(timeStampQueue);
+        }
     }
 
     // throw IllegalStateException
@@ -158,7 +160,9 @@ public class FFmpegPusherImpl implements StreamPusher {
                 try {
                     startFFmpeg(mConfig);
 
-                    state.setState(PUSHING);
+                    if (!state.setState(PUSHING)){
+                        throw new RuntimeException("pushing状态设置失败");
+                    }
                     if (listener != null) {
                         reportExecutor.submit(() -> listener.onStart());
                     }
@@ -204,20 +208,29 @@ public class FFmpegPusherImpl implements StreamPusher {
 
     @Override
     public void destroy() {
-        try {
-            if (statistics != null) {
-                // 停止统计
-                statistics.stopPushStatistics();
-            }
-            //销毁重连
-            disposeReconnect();
-            // 停止ffmpeg
-            stopFFmpeg();
+        synchronized (publicLock) {
+            try {
+                if (statistics != null) {
+                    // 停止统计
+                    statistics.stopPushStatistics();
+                }
+                //销毁重连
+                disposeReconnect();
+                // 停止ffmpeg
+                stopFFmpeg();
 
-            if (reportExecutor != null) {
-                reportExecutor.shutdown();
+                if (reportExecutor != null) {
+                    reportExecutor.shutdownNow();
+                }
+
+                if (!compositeDisposable.isDisposed()) {
+                    compositeDisposable.dispose();
+                }
+
+                state.setState(DESTROYED);
+            } catch (Exception ignored) {
             }
-        } catch (Exception ignored) {}
+        }
     }
 
     @Override
@@ -419,7 +432,7 @@ public class FFmpegPusherImpl implements StreamPusher {
 
                 // 参数复制
                 AVCodecParameters dstParams = videoStream.codecpar();
-                ret = avcodec_parameters_copy(dstParams, srcParams);
+                ret = avcodec_parameters_copy(dstParams, params);
                 if (ret < 0) {
                     throw new RuntimeException("参数复制失败: " + av_err2str(ret));
                 }
@@ -462,7 +475,7 @@ public class FFmpegPusherImpl implements StreamPusher {
                 statistics.setPushStatListener(new PushStatsListener() {
                     @Override
                     public void onStatistics(PushStatsInfo info) {
-                        if (listener != null) {
+                        if (listener != null  && state.getState() == PUSHING) {
                             reportExecutor.submit(() -> listener.onStatistics(info));
                         }
                     }
@@ -470,8 +483,10 @@ public class FFmpegPusherImpl implements StreamPusher {
                     @Override
                     public void onNeedReconnect() {
                         Executors.newSingleThreadExecutor().submit(() -> {
-                            reconnect(config.maxReconnectAttempts,
-                                    config.reconnectPeriodSeconds);
+                            if(state.getState() == PUSHING) {
+                                reconnect(config.maxReconnectAttempts,
+                                        config.reconnectPeriodSeconds);
+                            }
                         });
                     }
                 });

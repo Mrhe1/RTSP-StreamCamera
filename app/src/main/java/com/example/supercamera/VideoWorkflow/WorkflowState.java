@@ -6,7 +6,7 @@ import timber.log.Timber;
 
 public class WorkflowState {
     private static final String TAG = "WorkflowState";
-    public final AtomicReference<WorkflowStateEnum> currentState =
+    private final AtomicReference<WorkflowStateEnum> currentState =
             new AtomicReference<>(WorkflowStateEnum.READY);
     public enum WorkflowStateEnum {
         READY,
@@ -44,7 +44,7 @@ public class WorkflowState {
             case WORKING -> newState == WorkflowStateEnum.ERROR || newState == WorkflowStateEnum.STOPPING;
             case ERROR -> newState == WorkflowStateEnum.STOPPING || newState == WorkflowStateEnum.READY;
             case STOPPING -> newState == WorkflowStateEnum.READY || newState == WorkflowStateEnum.ERROR;
-            case DESTROYED -> false;
+            case DESTROYED -> true;
         };
     }
 }
