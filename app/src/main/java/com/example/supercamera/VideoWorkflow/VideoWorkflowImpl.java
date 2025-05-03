@@ -53,6 +53,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicReference;
 
 import timber.log.Timber;
 
@@ -159,7 +160,10 @@ public class VideoWorkflowImpl implements VideoWorkflow {
                 Timber.tag(TAG).i("工作流开始成功");
                 state.setState(WORKING);
                 // 报告最终配置
-                mListener.onStart(mPreviewSize, mRecordSize, mFps, mStabMode);
+                WorkflowListener mListener = mListenerRef.get();
+                if(mListener != null) {
+                    mListener.onStart(mPreviewSize, mRecordSize, mFps, mStabMode);
+                }
             });
         }
 
@@ -172,12 +176,11 @@ public class VideoWorkflowImpl implements VideoWorkflow {
 
     private final WorkflowState state = new WorkflowState();
     private WorkflowConfig mConfig;
-    private WorkflowListener mListener;
+    private final AtomicReference<WorkflowListener> mListenerRef = new AtomicReference<>();
     private final VideoStreamer streamer;
     private final VideoRecorder recorder;
     private final CameraController camera;
-    private final SurfaceManger surfaceManger = new SurfaceManger();
-    private final OnStartCheck checker = new OnStartCheck(startListener);
+    private final SurfaceManger surfaceManger = new SurfaceManger();    private final OnStartCheck checker = new OnStartCheck(startListener);
     private final TextureView textureView;
     private final String TAG = "VideoWorkflow";
     private final Object errorLock = new Object();
@@ -216,9 +219,13 @@ public class VideoWorkflowImpl implements VideoWorkflow {
             // 重置surfaceManger
             surfaceManger.reset();
 
+            setListeners();
             camera.configure(config.cameraConfig);
             recorder.configure(config.recorderConfig);
             streamer.configure(config.streamConfig);
+
+            // capturedTimeStampQueue
+            streamer.setTimeStampQueue(camera.getTimeStampQueue());
 
             state.setState(CONFIGURED);
         }
@@ -233,6 +240,8 @@ public class VideoWorkflowImpl implements VideoWorkflow {
             throw throwException(ILLEGAL_STATE, ERROR_Workflow_START, msg);
         }
 
+        state.setState(STARTING);
+
         Executors.newSingleThreadExecutor().submit(() -> {
             synchronized (publicLock) {
                 try {
@@ -246,6 +255,7 @@ public class VideoWorkflowImpl implements VideoWorkflow {
                     if (!surfaceManger.waitSurfaceReady(waitForSurfaceTimeMilliseconds)) {
                         notifyError(null, RUNTIME_ERROR, Surface_TimeOUT,
                                 "surface准备超时");
+                        return;
                     }
 
                     // 准备surfacesList
@@ -341,7 +351,7 @@ public class VideoWorkflowImpl implements VideoWorkflow {
 
     @Override
     public void setStreamListener(WorkflowListener listener) {
-        this.mListener = listener;
+        mListenerRef.set(listener);
     }
 
     private void setListeners() {
@@ -369,6 +379,7 @@ public class VideoWorkflowImpl implements VideoWorkflow {
 
             @Override
             public void onStatistics(PushStatsInfo stats) {
+                WorkflowListener mListener = mListenerRef.get();
                 if(mListener != null) mListener.onStatistics(stats);
             }
 
@@ -419,14 +430,16 @@ public class VideoWorkflowImpl implements VideoWorkflow {
                 state.getState() != STOPPING) return;
 
         // 重置startChecker
-        if(state.getState() == STARTING) checker.reset();
+        if(state.getState() == STARTING) {
+            checker.reset();
+        }
 
         state.setState(ERROR);
 
         Executors.newSingleThreadExecutor().submit(() -> {
             synchronized (errorLock) {
                 switch (code) {
-                    case ERROR_Workflow_START -> {
+                    case ERROR_Workflow_START, Start_TimeOUT -> {
                         stopStream();
                         stopCamera();
                         stopRecorder();
@@ -445,6 +458,8 @@ public class VideoWorkflowImpl implements VideoWorkflow {
                     }
                 }
 
+                state.setState(READY);
+                WorkflowListener mListener = mListenerRef.get();
                 if(mListener != null) {
                     if(e != null) {
                         e.addCode(code);

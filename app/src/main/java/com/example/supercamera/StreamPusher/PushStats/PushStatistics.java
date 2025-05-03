@@ -16,6 +16,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -33,7 +34,7 @@ public class PushStatistics {
     private final String url;
     private final double pushFailureRateSet;
     private final List<PublishSubject<TimeStamp>> reportQueue;
-    private PushStatsListener listener;
+    private final AtomicReference<PushStatsListener> listenerRef = new AtomicReference<>();
     private final CompositeDisposable compositeDisposable = new CompositeDisposable();
     String TAG = "PushStatistics";
     private List<FrameInfo> frameList = Collections.synchronizedList(new ArrayList<>());
@@ -205,7 +206,7 @@ public class PushStatistics {
 
     // 设置统计回调listener
     public void setPushStatListener (PushStatsListener listener) {
-        this.listener = listener;
+        listenerRef.set(listener);
     }
 
     // 在每帧push时调用
@@ -266,7 +267,10 @@ public class PushStatistics {
             // 重连回调
             if (curPushFailureRate.get() > pushFailureRateSet) {
                 reportExecutor.submit(() -> {
-                    listener.onNeedReconnect();
+                    PushStatsListener listener = listenerRef.get();
+                    if(listener != null) {
+                        listener.onNeedReconnect();
+                    }
                 });
             }
 
@@ -345,8 +349,11 @@ public class PushStatistics {
             int finalCurrentRTT = currentRTT;
             int finalTotalLatency = totalLatency;
             reportExecutor.submit(() -> {
-                listener.onStatistics(new PushStatsInfo(currentBitrate, finalCurrentRTT,
-                        curPushFailureRate.get(), finalTotalLatency));
+                PushStatsListener listener = listenerRef.get();
+                if(listener != null) {
+                    listener.onStatistics(new PushStatsInfo(currentBitrate, finalCurrentRTT,
+                            curPushFailureRate.get(), finalTotalLatency));
+                }
             });
         } catch (Exception e) {
             Timber.tag(TAG).e(e, "统计任务异常");

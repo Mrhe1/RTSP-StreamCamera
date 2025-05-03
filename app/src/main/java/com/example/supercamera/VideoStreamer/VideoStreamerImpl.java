@@ -28,6 +28,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicReference;
 
 import com.example.supercamera.MyException.MyException;
 import com.example.supercamera.StreamPusher.FFmpegPusherImpl;
@@ -47,7 +48,8 @@ public class VideoStreamerImpl implements VideoStreamer {
     private final VideoEncoder mVideoEncoder = new MediaCodecImpl();
     private final StreamPusher mPusher = new FFmpegPusherImpl();
     private StreamConfig mConfig;
-    private StreamListener mListener;
+    //private StreamListener mListener;
+    private final AtomicReference<StreamListener> mListenerRef = new AtomicReference<>();
     private final ExecutorService report = Executors.newSingleThreadExecutor();
     // 外部调用锁
     private final Object publicLock = new Object();
@@ -72,10 +74,10 @@ public class VideoStreamerImpl implements VideoStreamer {
             mConfig = config;
             checkParams(mConfig);
 
+            setListeners();
             mVideoEncoder.configure(mConfig.getEncoderConfig());
             mPusher.configure(mConfig.getPushConfig());
 
-            setListeners();
             state.setState(CONFIGURED);
         }
     }
@@ -104,7 +106,7 @@ public class VideoStreamerImpl implements VideoStreamer {
                         "CaptureTimeStampQueue，未设置");
             }
 
-            state.setState(STARTING);
+            boolean i = state.setState(STARTING);
             try {
                 mVideoEncoder.start();
             } catch (MyException e) {
@@ -156,7 +158,7 @@ public class VideoStreamerImpl implements VideoStreamer {
     @Override
     public void setStreamListener(StreamListener listener) {
         synchronized (publicLock) {
-            this.mListener = listener;
+            mListenerRef.set(listener);
         }
     }
 
@@ -173,6 +175,7 @@ public class VideoStreamerImpl implements VideoStreamer {
             @Override
             public void onSurfaceAvailable(Surface surface) {
                 report.submit(() -> {
+                    StreamListener mListener = mListenerRef.get();
                     if (mListener != null) mListener.onSurfaceAvailable(surface);
                 });
             }
@@ -220,18 +223,29 @@ public class VideoStreamerImpl implements VideoStreamer {
 
             @Override
             public void onStatistics(PushStatsInfo stats) {
-                if(mListener != null) mListener.onStatistics(stats);
+                report.submit(() -> {
+                    StreamListener mListener = mListenerRef.get();
+                    if(mListener != null)  mListener.onStatistics(stats);
+                });
             }
 
             @Override
             public void onStart() {
                 state.setState(STREAMING);
-                if(mListener != null) mListener.onStart();
+                report.submit(() -> {
+                    StreamListener mListener = mListenerRef.get();
+                    if (mListener != null) mListener.onStart();
+                });
             }
 
             @Override
             public void onReconnect(boolean ifSuccess, int reconnectAttempts) {
-                if(mListener != null) mListener.onReconnect(ifSuccess, reconnectAttempts);
+                report.submit(() -> {
+                    StreamListener mListener = mListenerRef.get();
+                    if (mListener != null) {
+                        mListener.onReconnect(ifSuccess, reconnectAttempts);
+                    }
+                });
             }
 
             @Override
@@ -276,6 +290,12 @@ public class VideoStreamerImpl implements VideoStreamer {
         if(report != null) {
             report.shutdownNow();
         }
+
+        if(EncodedTimeStampQueue != null) {
+            EncodedTimeStampQueue.onComplete();
+        }
+
+        mListenerRef.set(null);
     }
 
     private void checkParams(StreamConfig config) {
@@ -323,6 +343,7 @@ public class VideoStreamerImpl implements VideoStreamer {
                 }
 
                 state.setState(READY);
+                StreamListener mListener = mListenerRef.get();
                 if (mListener != null) {
                     if (e != null) {
                         e.addCode(code);

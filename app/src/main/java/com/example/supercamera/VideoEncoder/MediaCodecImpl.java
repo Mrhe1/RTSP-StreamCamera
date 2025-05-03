@@ -8,7 +8,6 @@ import static com.example.supercamera.VideoEncoder.ErrorCode.ERROR_CODEC_START;
 import static com.example.supercamera.VideoEncoder.ErrorCode.ERROR_CODEC_STOP;
 
 import android.media.MediaCodec;
-import android.media.MediaCodecInfo;
 import android.media.MediaFormat;
 import android.os.Handler;
 import android.os.HandlerThread;
@@ -27,7 +26,7 @@ import timber.log.Timber;
 
 public class MediaCodecImpl implements VideoEncoder {
     private MyEncoderConfig mConfig;
-    private EncoderListener mListener;
+    private final AtomicReference<EncoderListener> mListenerRef = new AtomicReference<>();
     private MediaCodec mMediaCodec;
     private final AtomicReference<Surface> mInputSurface = new AtomicReference<>();
     private final Object onErrorLock = new Object();
@@ -63,6 +62,7 @@ public class MediaCodecImpl implements VideoEncoder {
                     @Override
                     public void onInputBufferAvailable(@NonNull MediaCodec codec, int index) {
                         // Surface模式下无需处理输入缓冲区
+                        EncoderListener mListener = mListenerRef.get();
                         if (mListener != null) {
                             mListener.onInputBufferAvailable(codec, index);
                         }
@@ -72,6 +72,7 @@ public class MediaCodecImpl implements VideoEncoder {
                     @Override
                     public void onOutputBufferAvailable(@NonNull MediaCodec codec, int index,
                                                         @NonNull MediaCodec.BufferInfo info) {
+                        EncoderListener mListener = mListenerRef.get();
                         if (mListener != null) {
                             mListener.onOutputBufferAvailable(codec, index, info);
                         }
@@ -92,6 +93,7 @@ public class MediaCodecImpl implements VideoEncoder {
                     public void onOutputFormatChanged(@NonNull MediaCodec codec,
                                                       @NonNull MediaFormat format) {
                         reportExecutor.submit(() -> {
+                            EncoderListener mListener = mListenerRef.get();
                             if (mListener != null) {
                                 mListener.onStart(codec, format);
                             }
@@ -102,6 +104,7 @@ public class MediaCodecImpl implements VideoEncoder {
                 // 创建输入Surface
                 mInputSurface.set(mMediaCodec.createInputSurface());
                 reportExecutor.submit(() -> {
+                    EncoderListener mListener = mListenerRef.get();
                     if (mListener != null) {
                         mListener.onSurfaceAvailable(mInputSurface.get());
                     }
@@ -188,7 +191,7 @@ public class MediaCodecImpl implements VideoEncoder {
     @Override
     public void setEncoderListener(EncoderListener listener) {
         synchronized (publicLock) {
-            mListener = listener;
+            mListenerRef.set(listener);
         }
     }
 
@@ -217,6 +220,7 @@ public class MediaCodecImpl implements VideoEncoder {
                 }
 
                 onError.set(false);
+                EncoderListener mListener = mListenerRef.get();
                 if (mListener != null) {
                     mListener.onError(new MyException(this.getClass().getPackageName(),
                             type, code, message));

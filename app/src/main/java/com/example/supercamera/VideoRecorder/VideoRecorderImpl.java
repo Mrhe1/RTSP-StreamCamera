@@ -23,6 +23,7 @@ import java.nio.ByteBuffer;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import timber.log.Timber;
 
@@ -35,7 +36,7 @@ public class VideoRecorderImpl implements VideoRecorder {
     private final Object errorLock = new Object();
 
     //private RecorderConfig mConfig;
-    private RecorderListener mListener;
+    private final AtomicReference<RecorderListener> mListenerRef = new AtomicReference<>();
     private final VideoEncoder mVideoEncoder = new MediaCodecImpl();
     private MediaMuxer mMediaMuxer;
     private int mTrackIndex = -1;
@@ -76,13 +77,15 @@ public class VideoRecorderImpl implements VideoRecorder {
                         @Override
                         public void onStart(MediaCodec codec, MediaFormat format) {
                             setupMuxer(format);
-                            state.setState(RECORDING);
+                            boolean i = state.setState(RECORDING);
+                            RecorderListener mListener = mListenerRef.get();
                             if (mListener != null) mListener.onStart();
                         }
 
                         @Override
                         public void onSurfaceAvailable(Surface surface) {
                             mInputSurface = surface;
+                            RecorderListener mListener = mListenerRef.get();
                             if (mListener != null) {
                                 mListener.onSurfaceAvailable(surface);
                             }
@@ -177,7 +180,7 @@ public class VideoRecorderImpl implements VideoRecorder {
 
     @Override
     public void setRecorderListener(RecorderListener listener) {
-        mListener = listener;
+        mListenerRef.set(listener);
     }
 
     private void setupMuxer(MediaFormat format) {
@@ -197,7 +200,7 @@ public class VideoRecorderImpl implements VideoRecorder {
     }
 
     private void handleEncodedData(MediaCodec codec, int index, MediaCodec.BufferInfo info) {
-        mEncoderExecutor.submit(() -> {
+        //mEncoderExecutor.submit(() -> {
             try {
                 ByteBuffer buffer = codec.getOutputBuffer(index);
                 if ((info.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) return;
@@ -211,7 +214,7 @@ public class VideoRecorderImpl implements VideoRecorder {
             } catch (Exception e) {
                 Timber.tag(TAG).e(e, "Error writing sample data");
             }
-        });
+        //});
     }
 
     private void releaseResource() {
@@ -269,6 +272,7 @@ public class VideoRecorderImpl implements VideoRecorder {
 
                 state.setState(READY);
 
+                RecorderListener mListener = mListenerRef.get();
                 if (mListener != null) {
                     if (e != null) {
                         e.addCode(code);

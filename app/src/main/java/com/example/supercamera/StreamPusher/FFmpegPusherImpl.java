@@ -68,6 +68,7 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import io.reactivex.rxjava3.core.Observable;
 import io.reactivex.rxjava3.disposables.CompositeDisposable;
@@ -81,7 +82,7 @@ public class FFmpegPusherImpl implements StreamPusher {
     private final String TAG = "FFmpegPusher";
     private PushConfig mConfig;
     private AVCodecParameters params = avcodec_parameters_alloc();
-    private PushListener listener;
+    private final AtomicReference<PushListener> listenerRef = new AtomicReference<>();
     private final Object FFmpegLock = new Object();
     private final Object reconnectLock = new Object();
     // 外部调用锁
@@ -91,8 +92,8 @@ public class FFmpegPusherImpl implements StreamPusher {
     private AVFormatContext outputContext;
     private AVStream videoStream;
     private PushStatistics statistics;
-    private PublishSubject<TimeStamp> pushReportQueue = PublishSubject.create();
-    private ExecutorService reportExecutor = Executors.newSingleThreadExecutor();
+    private final PublishSubject<TimeStamp> pushReportQueue = PublishSubject.create();
+    private final ExecutorService reportExecutor = Executors.newSingleThreadExecutor();
     private Disposable reconnectDisposable;
     private final CompositeDisposable compositeDisposable = new CompositeDisposable();
 
@@ -163,6 +164,8 @@ public class FFmpegPusherImpl implements StreamPusher {
                     if (!state.setState(PUSHING)){
                         throw new RuntimeException("pushing状态设置失败");
                     }
+
+                    PushListener listener = listenerRef.get();
                     if (listener != null) {
                         reportExecutor.submit(() -> listener.onStart());
                     }
@@ -355,7 +358,7 @@ public class FFmpegPusherImpl implements StreamPusher {
     @Override
     public void setPushListener(PushListener listener) {
         synchronized (publicLock) {
-            this.listener = listener;
+            listenerRef.set(listener);
         }
     }
 
@@ -475,6 +478,7 @@ public class FFmpegPusherImpl implements StreamPusher {
                 statistics.setPushStatListener(new PushStatsListener() {
                     @Override
                     public void onStatistics(PushStatsInfo info) {
+                        PushListener listener = listenerRef.get();
                         if (listener != null  && state.getState() == PUSHING) {
                             reportExecutor.submit(() -> listener.onStatistics(info));
                         }
@@ -597,6 +601,7 @@ public class FFmpegPusherImpl implements StreamPusher {
                                     state.setState(PUSHING);
                                     disposeReconnect();
 
+                                    PushListener listener = listenerRef.get();
                                     if (listener != null) {
                                         reportExecutor.submit(() -> {
                                             listener.onReconnect(true, (int) (tick + 1));
@@ -605,6 +610,7 @@ public class FFmpegPusherImpl implements StreamPusher {
                                 } catch (RuntimeException e) {
                                     // 单次重连失败
                                     Timber.tag(TAG).e(e, "单次重连操作失败");
+                                    PushListener listener = listenerRef.get();
                                     reportExecutor.submit(() -> {
                                         listener.onReconnect(false, (int)(tick + 1));
                                     });
@@ -683,6 +689,8 @@ public class FFmpegPusherImpl implements StreamPusher {
                 MyException e = new MyException(this.getClass().getPackageName(),
                         type, code, message);
 
+
+                PushListener listener = listenerRef.get();
                 if (listener != null) {
                     if (code == ERROR_FFmpeg_ReconnectFail ||
                             code == ERROR_FFmpeg_Reconnect) {

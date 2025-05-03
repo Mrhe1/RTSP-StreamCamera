@@ -38,9 +38,9 @@ public class RecorderState {
         RecorderStateEnum current = currentState.get();
         return switch (current) {
             case READY -> newState == RecorderStateEnum.CONFIGURED || newState == RecorderStateEnum.ERROR;
-            case STARTING -> newState == RecorderStateEnum.ERROR || newState == RecorderStateEnum.CONFIGURED;
             case CONFIGURED -> newState == RecorderStateEnum.STARTING || newState == RecorderStateEnum.ERROR ||
                                 newState == RecorderStateEnum.CONFIGURED;
+            case STARTING -> newState == RecorderStateEnum.ERROR || newState == RecorderStateEnum.RECORDING;
             case RECORDING -> newState == RecorderStateEnum.ERROR || newState == RecorderStateEnum.STOPPING;
             case ERROR -> newState == RecorderStateEnum.STOPPING || newState == RecorderStateEnum.READY;
             case STOPPING -> newState == RecorderStateEnum.READY || newState == RecorderStateEnum.ERROR;

@@ -54,6 +54,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicReference;
 
 import io.reactivex.rxjava3.subjects.PublishSubject;
 import timber.log.Timber;
@@ -61,7 +62,7 @@ import timber.log.Timber;
 public class CameraImpl implements CameraController {
     private final CameraState state = new CameraState();
     private CameraConfig mConfig;
-    private CameraListener mListener;
+    private final AtomicReference<CameraListener> mListenerRef = new AtomicReference<>();
     private Handler cameraHandler;
     private CameraDevice cameraDevice;
     private final String TAG = "CameraController";
@@ -108,6 +109,13 @@ public class CameraImpl implements CameraController {
             fpsRange = getFpsRange(config.fps);
             // 获取防抖模式
             finalStabMode = getStabMode(config.stabilizationMode);
+        }
+    }
+
+    @Override
+    public PublishSubject<TimeStamp> getTimeStampQueue() {
+        synchronized (publicLock) {
+            return reportQueue;
         }
     }
 
@@ -205,7 +213,9 @@ public class CameraImpl implements CameraController {
 
     @Override
     public void setCameraListener(CameraListener listener) {
-        this.mListener = listener;
+        synchronized (publicLock) {
+            mListenerRef.set(listener);
+        }
     }
 
     private String getCameraId(int myCameraFacing) {
@@ -344,9 +354,9 @@ public class CameraImpl implements CameraController {
             if(eisON && oisON) {
                 return Stab_HYBRID;
             } else if (eisON) {
-                return Stab_OIS_ONLY;
-            } else if (oisON) {
                 return Stab_EIS_ONLY;
+            } else if (oisON) {
+                return Stab_OIS_ONLY;
             }else {
                 return Stab_OFF;
             }
@@ -380,8 +390,10 @@ public class CameraImpl implements CameraController {
                     cameraCaptureSession = session;
                     try {
                         session.setRepeatingRequest(requestBuilder.build(), null, cameraHandler);
-                        if(mListener != null) {
-                            reportExecutor.submit(() -> mListener.onCameraOpened(mConfig.previewSize, mConfig.recordSize,
+
+                        CameraListener listener = mListenerRef.get();
+                        if(listener != null) {
+                            reportExecutor.submit(() -> listener.onCameraOpened(mConfig.previewSize, mConfig.recordSize,
                                     fpsRange.getUpper(), finalStabMode));
                         }
 
@@ -443,6 +455,10 @@ public class CameraImpl implements CameraController {
             if (reportExecutor != null) {
                 reportExecutor.shutdownNow();
             }
+
+            if (reportQueue != null) {
+                reportQueue.onComplete();
+            }
         } catch (Exception ignored) {}
     }
 
@@ -461,8 +477,9 @@ public class CameraImpl implements CameraController {
                     case ERROR_OpenCamera -> stopOnlyDevice();
                 }
 
-                if(mListener != null) {
-                    mListener.onError(throwException(type,code,message));
+                CameraListener listener = mListenerRef.get();
+                if(listener != null) {
+                    listener.onError(throwException(type,code,message));
                 }
             }
         });
