@@ -169,6 +169,7 @@ public class VideoWorkflowImpl implements VideoWorkflow {
 
         @Override
         public void onStartTimeOUT() {
+            if(state.getState() != STARTING) return;
             Timber.tag(TAG).e("工作流启动超时");
             notifyError(null, RUNTIME_ERROR, Start_TimeOUT, "工作流启动超时");
         }
@@ -188,7 +189,7 @@ public class VideoWorkflowImpl implements VideoWorkflow {
     private final Handler mMainHandler = new Handler(Looper.getMainLooper());
     private final ExecutorService reportExecutor = Executors.newSingleThreadExecutor();
     // 开始的超时时间
-    private final Long startTimeOutMilliseconds = 3_000L;
+    private final Long startTimeOutMilliseconds = 8500L;
     private final Long waitForSurfaceTimeMilliseconds = 1_500L;
     private final Context context;
     // 最终配置参数
@@ -303,8 +304,6 @@ public class VideoWorkflowImpl implements VideoWorkflow {
                         new Handler().postDelayed(() ->
                                 textureView.setVisibility(View.VISIBLE), 100);
                     });
-
-                    state.setState(WORKING);
                 } catch (MyException e) {
                     notifyError(e,0,ERROR_Workflow_START,null);
                 }
@@ -326,6 +325,8 @@ public class VideoWorkflowImpl implements VideoWorkflow {
         Executors.newSingleThreadExecutor().submit(() -> {
             synchronized (publicLock) {
                 state.setState(STOPPING);
+                // 隐藏画面
+                textureView.post(() -> textureView.setVisibility(View.INVISIBLE));
                 // 停止推流
                 stopStream();
                 // 停止摄像头
@@ -426,8 +427,6 @@ public class VideoWorkflowImpl implements VideoWorkflow {
     }
 
     private MyException throwException(int type, int code, String message) {
-        // 重置startChecker
-        if(state.getState() == STARTING) checker.reset();
         return new MyException(this.getClass().getPackageName(),
                 type, code, message);
     }
@@ -446,6 +445,8 @@ public class VideoWorkflowImpl implements VideoWorkflow {
 
         Executors.newSingleThreadExecutor().submit(() -> {
             synchronized (errorLock) {
+                // 隐藏textureView
+                textureView.post(() -> textureView.setVisibility(View.INVISIBLE));
                 switch (code) {
                     case ERROR_Workflow_START, Start_TimeOUT -> {
                         stopStream();
@@ -458,7 +459,7 @@ public class VideoWorkflowImpl implements VideoWorkflow {
                     }
                     case ERROR_Streamer -> {
                         stopCamera();
-                        stopStream();
+                        stopRecorder();
                     }
                     case ERROR_Camera, Surface_TimeOUT -> {
                         stopStream();
@@ -482,18 +483,18 @@ public class VideoWorkflowImpl implements VideoWorkflow {
 
     private void stopStream() {
         // 两次尝试stop
-        for(int i = 0;i <= 2;i++){
+        for(int i = 0;i <= 1;i++){
             try {
                 streamer.stop();
                 break;
             } catch (MyException e) {
-                Timber.tag(TAG).w(e,"stopStream失败%d次",i);
+                Timber.tag(TAG).w(e,"stopStream失败%d次",i + 1);
             }finally {
                 try {
                     Thread.sleep(1500L); // 1.5s
-                } catch (InterruptedException e) {}
+                } catch (InterruptedException ignored) {}
                 // 强制停止
-                if(i == 2) {
+                if(i == 1) {
                     Timber.tag(TAG).w("强制停止videoStreamer");
                     streamer.destroy();
                     streamer = new VideoStreamerImpl();
@@ -504,18 +505,18 @@ public class VideoWorkflowImpl implements VideoWorkflow {
 
     private void stopCamera() {
         // 两次尝试stop
-        for(int i = 0;i <= 2;i++){
+        for(int i = 0;i <= 1;i++){
             try {
                 camera.stop();
                 break;
             } catch (MyException e) {
-                Timber.tag(TAG).w(e,"Camera失败%d次",i);
+                Timber.tag(TAG).w(e,"Camera失败%d次",i + 1);
             }finally {
                 try {
                     Thread.sleep(1500L); // 1.5s
-                } catch (InterruptedException e) {}
+                } catch (InterruptedException ignored) {}
                 // 强制停止
-                if(i == 2) {
+                if(i == 1) {
                     Timber.tag(TAG).w("强制停止Camera");
                     camera.destroy();
                     camera = new CameraImpl(context);
@@ -526,18 +527,18 @@ public class VideoWorkflowImpl implements VideoWorkflow {
 
     private void stopRecorder() {
         // 两次尝试stop
-        for(int i = 0;i <= 2;i++){
+        for(int i = 0;i <= 1;i++){
             try {
                 recorder.stop();
                 break;
             } catch (MyException e) {
-                Timber.tag(TAG).w(e,"Camera失败%d次",i);
+                Timber.tag(TAG).w(e,"Camera失败%d次",i + 1);
             }finally {
                 try {
                     Thread.sleep(1500L); // 1.5s
-                } catch (InterruptedException e) {}
+                } catch (InterruptedException ignored) {}
                 // 强制停止
-                if(i == 2) {
+                if(i == 1) {
                     Timber.tag(TAG).w("强制停止Camera");
                     recorder.destroy();
                     recorder = new VideoRecorderImpl();

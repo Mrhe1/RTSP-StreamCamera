@@ -459,7 +459,12 @@ public class FFmpegPusherImpl implements StreamPusher {
                 av_dict_set(options, "rtsp_transport", "tcp", 0);
                 av_dict_set(options, "max_delay", "200000", 0);
                 av_dict_set(options, "tune", "zerolatency", 0);
-                av_dict_set(options, "timeout", "3000000", 0); // 3秒超时\
+                // set maximum timeout (in seconds) to wait for incoming connections (-1 is infinite, imply flag listen) (deprecated, use listen_timeout) (from INT_MIN to INT_MAX) (default -1)
+                av_dict_set(options, "timeout", "1500000", 0); // 1.5秒超时
+                // set timeout (in microseconds) of socket TCP I/O operations (from INT_MIN to INT_MAX) (default 0)
+                av_dict_set(options, "stimeout", "1500000", 0); // 1.5秒超时
+                // Timeout for IO operations (in microseconds) (from 0 to I64_MAX) (default 0)
+                //av_dict_set(options, "rw_timeout", "1500000", 0);
                 av_dict_set(options, "f", "rtsp", 0);
 
                 // 6. 写入头部
@@ -675,7 +680,7 @@ public class FFmpegPusherImpl implements StreamPusher {
     }
 
     private void notifyError(int type,int code, String message) {
-        if (state.getState() == ERROR &&
+        if (state.getState() == ERROR ||
                 state.getState() == READY) return;
 
         state.setState(ERROR);

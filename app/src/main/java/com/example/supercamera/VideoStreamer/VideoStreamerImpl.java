@@ -199,7 +199,7 @@ public class VideoStreamerImpl implements VideoStreamer {
 
                     // 忽略配置数据（如 SPS/PPS）
                     if ((info.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
-                        if (state.getState() == StartPUSHING) {
+                        if (state.getState() == STARTING) {
                             // 提取 SPS/PPS
                             byte[] configData = new byte[info.size];
                             outputBuffer.position(info.offset);
@@ -323,7 +323,8 @@ public class VideoStreamerImpl implements VideoStreamer {
 
     private void notifyError(MyException e,int type, int code, String message) {
         if (state.getState() != STREAMING &&
-                state.getState() != STREAMING &&
+                state.getState() != StartPUSHING &&
+                state.getState() != STARTING &&
                 state.getState() != STOPPING) return;
 
         state.setState(ERROR);

@@ -179,6 +179,8 @@ public class CameraImpl implements CameraController {
                 throw throwException(ILLEGAL_STATE, ERROR_StopCamera, msg);
             }
 
+            state.setState(CLOSING);
+
             try {
                 // 释放资源
                 if (cameraCaptureSession != null) {

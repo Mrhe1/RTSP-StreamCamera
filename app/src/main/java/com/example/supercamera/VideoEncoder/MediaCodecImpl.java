@@ -162,7 +162,7 @@ public class MediaCodecImpl implements VideoEncoder {
                     mMediaCodec.release();
                     mMediaCodec = null;
                 }
-                if (mInputSurface != null) {
+                if (mInputSurface.get() != null) {
                     mInputSurface.get().release();
                     mInputSurface.set(null);
                 }
