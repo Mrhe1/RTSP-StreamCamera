@@ -33,6 +33,8 @@ public class CameraState {
     }
 
     private boolean isValidTransition(CameraStateEnum newState) {
+        if(newState == CameraStateEnum.DESTROYED) return true;
+
         CameraStateEnum current = currentState.get();
         return switch (current) {
             case READY -> newState == CameraStateEnum.CONFIGURE;
@@ -47,7 +49,7 @@ public class CameraState {
                     newState == CameraStateEnum.READY;
             case CLOSING -> newState == CameraStateEnum.READY ||
                     newState == CameraStateEnum.ERROR;
-            case DESTROYED -> true;
+            case DESTROYED -> false;
         };
     }
 }

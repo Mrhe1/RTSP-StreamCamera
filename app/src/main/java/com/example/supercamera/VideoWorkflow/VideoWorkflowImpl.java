@@ -177,9 +177,9 @@ public class VideoWorkflowImpl implements VideoWorkflow {
     private final WorkflowState state = new WorkflowState();
     private WorkflowConfig mConfig;
     private final AtomicReference<WorkflowListener> mListenerRef = new AtomicReference<>();
-    private final VideoStreamer streamer;
-    private final VideoRecorder recorder;
-    private final CameraController camera;
+    private VideoStreamer streamer;
+    private VideoRecorder recorder;
+    private CameraController camera;
     private final SurfaceManger surfaceManger = new SurfaceManger();    private final OnStartCheck checker = new OnStartCheck(startListener);
     private final TextureView textureView;
     private final String TAG = "VideoWorkflow";
@@ -190,6 +190,7 @@ public class VideoWorkflowImpl implements VideoWorkflow {
     // 开始的超时时间
     private final Long startTimeOutMilliseconds = 3_000L;
     private final Long waitForSurfaceTimeMilliseconds = 1_500L;
+    private final Context context;
     // 最终配置参数
     private Size mPreviewSize;
     private Size mRecordSize;
@@ -201,6 +202,7 @@ public class VideoWorkflowImpl implements VideoWorkflow {
         this.recorder = new VideoRecorderImpl();
         this.camera = new CameraImpl(context);
         this.textureView = textureView;
+        this.context = context;
         textureView.setSurfaceTextureListener(surfaceTextureListener);
     }
 
@@ -312,6 +314,8 @@ public class VideoWorkflowImpl implements VideoWorkflow {
 
     @Override
     public void stop() {
+        if(state.getState() == CONFIGURED || state.getState() == READY) return;
+
         if (state.getState() != WORKING) {
             String msg = String.format("stop failed, current state: %s",
                     state.getState().toString());
@@ -319,26 +323,30 @@ public class VideoWorkflowImpl implements VideoWorkflow {
             throw throwException(ILLEGAL_STATE, ERROR_Workflow_STOP, msg);
         }
 
-        synchronized (publicLock) {
-            try{
+        Executors.newSingleThreadExecutor().submit(() -> {
+            synchronized (publicLock) {
+                state.setState(STOPPING);
                 // 停止推流
-                streamer.stop();
+                stopStream();
                 // 停止摄像头
-                camera.stop();
+                stopCamera();
                 // 停止录制
-                recorder.stop();
+                stopRecorder();
                 // 更新state
                 state.setState(READY);
-            } catch (MyException e) {
-                Timber.tag(TAG).e(e,"停止工作流出错");
+
+                WorkflowListener listener = mListenerRef.get();
+                if(listener != null) listener.onStop();
             }
-        }
+        });
     }
 
     @Override
     public void destroy() {
         synchronized (publicLock) {
-            stop();
+            try {
+                stop();
+            } catch (Exception ignored) {}
 
             if(reportExecutor != null) {
                 reportExecutor.shutdownNow();
@@ -473,23 +481,68 @@ public class VideoWorkflowImpl implements VideoWorkflow {
     }
 
     private void stopStream() {
-        try{
-            streamer.stop();
-        } catch (Exception ignored) {
+        // 两次尝试stop
+        for(int i = 0;i <= 2;i++){
+            try {
+                streamer.stop();
+                break;
+            } catch (MyException e) {
+                Timber.tag(TAG).w(e,"stopStream失败%d次",i);
+            }finally {
+                try {
+                    Thread.sleep(1500L); // 1.5s
+                } catch (InterruptedException e) {}
+                // 强制停止
+                if(i == 2) {
+                    Timber.tag(TAG).w("强制停止videoStreamer");
+                    streamer.destroy();
+                    streamer = new VideoStreamerImpl();
+                }
+            }
         }
     }
 
     private void stopCamera() {
-        try{
-            camera.stop();
-        } catch (Exception ignored) {
+        // 两次尝试stop
+        for(int i = 0;i <= 2;i++){
+            try {
+                camera.stop();
+                break;
+            } catch (MyException e) {
+                Timber.tag(TAG).w(e,"Camera失败%d次",i);
+            }finally {
+                try {
+                    Thread.sleep(1500L); // 1.5s
+                } catch (InterruptedException e) {}
+                // 强制停止
+                if(i == 2) {
+                    Timber.tag(TAG).w("强制停止Camera");
+                    camera.destroy();
+                    camera = new CameraImpl(context);
+                }
+            }
         }
     }
 
     private void stopRecorder() {
-        try{
-            recorder.stop();
-        } catch (Exception ignored) {
+        // 两次尝试stop
+        for(int i = 0;i <= 2;i++){
+            try {
+                recorder.stop();
+                break;
+            } catch (MyException e) {
+                Timber.tag(TAG).w(e,"Camera失败%d次",i);
+            }finally {
+                try {
+                    Thread.sleep(1500L); // 1.5s
+                } catch (InterruptedException e) {}
+                // 强制停止
+                if(i == 2) {
+                    Timber.tag(TAG).w("强制停止Camera");
+                    recorder.destroy();
+                    recorder = new VideoRecorderImpl();
+                }
+            }
         }
     }
 }

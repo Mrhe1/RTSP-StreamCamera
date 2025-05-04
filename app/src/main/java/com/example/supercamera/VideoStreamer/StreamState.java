@@ -35,6 +35,8 @@ public class StreamState {
 
     private boolean isValidTransition(StreamStateEnum newState) {
         // 实现状态转换规则校验
+        if(newState == StreamStateEnum.DESTROYED) return true;
+
         StreamStateEnum current = currentState.get();
         return switch (current) {
             case READY -> newState == StreamStateEnum.CONFIGURED || newState == StreamStateEnum.ERROR;
@@ -46,7 +48,7 @@ public class StreamState {
             case STREAMING -> newState == StreamStateEnum.ERROR || newState == StreamStateEnum.STOPPING;
             case ERROR -> newState == StreamStateEnum.STOPPING || newState == StreamStateEnum.READY;
             case STOPPING -> newState == StreamStateEnum.READY || newState == StreamStateEnum.ERROR;
-            case DESTROYED -> true;
+            case DESTROYED -> false;
         };
     }
 }

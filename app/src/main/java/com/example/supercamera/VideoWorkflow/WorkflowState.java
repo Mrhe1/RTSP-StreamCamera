@@ -35,6 +35,8 @@ public class WorkflowState {
 
     private boolean isValidTransition(WorkflowStateEnum newState) {
         // 实现状态转换规则校验
+        if(newState == WorkflowStateEnum.DESTROYED) return true;
+
         WorkflowStateEnum current = currentState.get();
         return switch (current) {
             case READY -> newState == WorkflowStateEnum.CONFIGURED || newState == WorkflowStateEnum.ERROR;
@@ -44,7 +46,7 @@ public class WorkflowState {
             case WORKING -> newState == WorkflowStateEnum.ERROR || newState == WorkflowStateEnum.STOPPING;
             case ERROR -> newState == WorkflowStateEnum.STOPPING || newState == WorkflowStateEnum.READY;
             case STOPPING -> newState == WorkflowStateEnum.READY || newState == WorkflowStateEnum.ERROR;
-            case DESTROYED -> true;
+            case DESTROYED -> false;
         };
     }
 }

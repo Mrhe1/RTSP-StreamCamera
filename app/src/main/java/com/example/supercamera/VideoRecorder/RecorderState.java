@@ -35,6 +35,8 @@ public class RecorderState {
 
     private boolean isValidTransition(RecorderStateEnum newState) {
         // 实现状态转换规则校验
+        if(newState == RecorderStateEnum.DESTROYED) return true;
+
         RecorderStateEnum current = currentState.get();
         return switch (current) {
             case READY -> newState == RecorderStateEnum.CONFIGURED || newState == RecorderStateEnum.ERROR;
@@ -44,7 +46,7 @@ public class RecorderState {
             case RECORDING -> newState == RecorderStateEnum.ERROR || newState == RecorderStateEnum.STOPPING;
             case ERROR -> newState == RecorderStateEnum.STOPPING || newState == RecorderStateEnum.READY;
             case STOPPING -> newState == RecorderStateEnum.READY || newState == RecorderStateEnum.ERROR;
-            case DESTROYED -> true;
+            case DESTROYED -> false;
         };
     }
 }

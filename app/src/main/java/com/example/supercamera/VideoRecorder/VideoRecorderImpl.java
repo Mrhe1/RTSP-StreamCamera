@@ -139,6 +139,8 @@ public class VideoRecorderImpl implements VideoRecorder {
     @Override
     public void stop() {
         synchronized (publicLock) {
+            if(state.getState() == CONFIGURED || state.getState() == READY) return;
+
             if (state.getState() != RECORDING) {
                 String msg = String.format("stop failed, current state: %s",
                         state.getState().toString());

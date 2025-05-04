@@ -7,6 +7,7 @@ import com.example.supercamera.StreamPusher.PushStats.PushStatsInfo;
 
 public interface WorkflowListener {
     void onStart(Size previewSize, Size recordSize, int fps, int stabMode);
+    void onStop();
     void onError(MyException e);
     void onStatistics(PushStatsInfo stats);
 }

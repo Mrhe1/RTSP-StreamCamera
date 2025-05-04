@@ -52,6 +52,7 @@ import com.example.supercamera.StreamPusher.PushStats.PushStatistics;
 import com.example.supercamera.StreamPusher.PushStats.PushStatsInfo;
 import com.example.supercamera.StreamPusher.PushStats.PushStatsListener;
 import com.example.supercamera.StreamPusher.PushStats.TimeStamp;
+import com.example.supercamera.VideoRecorder.RecorderState;
 
 import org.bytedeco.ffmpeg.avcodec.AVCodecParameters;
 import org.bytedeco.ffmpeg.avcodec.AVPacket;
@@ -182,6 +183,8 @@ public class FFmpegPusherImpl implements StreamPusher {
     @Override
     public void stop() {
         synchronized (publicLock) {
+            if(state.getState() == CONFIGURED || state.getState() == READY) return;
+
             if (state.getState() != PUSHING &&
                     state.getState() != RECONNECTING) {
                 String msg = String.format("stop出错，IllegalState，目前状态：%s",

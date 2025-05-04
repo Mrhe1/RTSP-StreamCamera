@@ -171,6 +171,8 @@ public class CameraImpl implements CameraController {
     @Override
     public void stop() {
         synchronized (publicLock) {
+            if(state.getState() == READY || state.getState() == CONFIGURE) return;
+
             if (state.getState() != PREVIEWING) {
                 String msg = String.format("stop failed, current state: %s", state.getState().toString());
                 Timber.tag(TAG).e(msg);
@@ -196,6 +198,8 @@ public class CameraImpl implements CameraController {
                 }
             } catch (Exception e) {
                 Timber.tag(TAG).e("摄像头关闭失败:%s", e.getMessage());
+            }finally {
+                state.setState(READY);
             }
         }
     }
@@ -391,13 +395,14 @@ public class CameraImpl implements CameraController {
                     try {
                         session.setRepeatingRequest(requestBuilder.build(), null, cameraHandler);
 
+                        Timber.tag(TAG).i("摄像头初始化成功");
+                        state.setState(PREVIEWING);
+
                         CameraListener listener = mListenerRef.get();
                         if(listener != null) {
                             reportExecutor.submit(() -> listener.onCameraOpened(mConfig.previewSize, mConfig.recordSize,
                                     fpsRange.getUpper(), finalStabMode));
                         }
-
-                        Timber.tag(TAG).i("摄像头初始化成功");
 
                         cameraCaptureSession.setRepeatingRequest(requestBuilder.build(),
                                 new CameraCaptureSession.CaptureCallback() {

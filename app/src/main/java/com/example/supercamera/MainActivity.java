@@ -51,6 +51,15 @@ public class MainActivity extends AppCompatActivity {
         }
 
         @Override
+        public void onStop() {
+            Timber.tag(TAG).i("工作流停止成功");
+            runOnUiThread(() -> {
+                btnStart.setEnabled(true);
+                btnStop.setEnabled(false);
+            });
+        }
+
+        @Override
         public void onError(MyException e) {
             Timber.tag(TAG).e(e,"工作流出错：%s，%s；package：%s,code:%s",
                                 e.getCodeString(), e.getMessage(),
@@ -143,11 +152,6 @@ public class MainActivity extends AppCompatActivity {
     {
         try {
             workflow.stop();
-
-            runOnUiThread(() -> {
-                btnStart.setEnabled(true);
-                btnStop.setEnabled(false);
-            });
         } catch (Exception e) {
             Timber.tag(TAG).e("工作流停止出错：%s",e.getMessage());
         }

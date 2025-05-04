@@ -39,6 +39,7 @@ import com.example.supercamera.StreamPusher.StreamPusher;
 import com.example.supercamera.VideoEncoder.EncoderListener;
 import com.example.supercamera.VideoEncoder.MediaCodecImpl;
 import com.example.supercamera.VideoEncoder.VideoEncoder;
+import com.example.supercamera.VideoWorkflow.WorkflowState;
 
 import io.reactivex.rxjava3.subjects.PublishSubject;
 import timber.log.Timber;
@@ -121,6 +122,8 @@ public class VideoStreamerImpl implements VideoStreamer {
     @Override
     public void stop() {
         synchronized (publicLock) {
+            if(state.getState() == CONFIGURED || state.getState() == READY) return;
+
             if (state.getState() != STREAMING) {
                 String msg = String.format("stop failed, current state: %s",
                         state.getState().toString());

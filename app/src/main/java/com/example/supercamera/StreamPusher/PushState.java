@@ -35,6 +35,7 @@ public class PushState {
 
         private boolean isValidTransition(PushStateEnum newState) {
                 // 实现状态转换规则校验
+                if(newState == PushStateEnum.DESTROYED) return true;
                 PushStateEnum current = currentState.get();
                 return switch (current) {
                         case READY -> newState == PushStateEnum.CONFIGURED || newState == PushStateEnum.ERROR;
@@ -47,7 +48,7 @@ public class PushState {
                                 || newState == PushStateEnum.STOPPING;
                         case ERROR -> newState == PushStateEnum.STOPPING || newState == PushStateEnum.READY;
                         case STOPPING -> newState == PushStateEnum.READY || newState == PushStateEnum.ERROR;
-                        case DESTROYED -> true;
+                        case DESTROYED -> false;
                 };
         }
 }
