@@ -1,5 +1,7 @@
 package com.example.supercamera.VideoEncoder;
 
+import static com.example.supercamera.MyException.ErrorLock.getLock;
+import static com.example.supercamera.MyException.ErrorLock.releaseLock;
 import static com.example.supercamera.MyException.MyException.ILLEGAL_STATE;
 import static com.example.supercamera.MyException.MyException.RUNTIME_ERROR;
 import static com.example.supercamera.VideoEncoder.ErrorCode.ERROR_CODEC;
@@ -211,6 +213,8 @@ public class MediaCodecImpl implements VideoEncoder {
     private void notifyError(int type,int code, String message) {
         if (onError.get()) return;
         onError.set(true);
+        // 获取errorLock
+        if(!getLock()) return;
 
         Executors.newSingleThreadExecutor().submit(() -> {
             synchronized (onErrorLock) {
@@ -220,6 +224,9 @@ public class MediaCodecImpl implements VideoEncoder {
                 }
 
                 onError.set(false);
+                // 释放锁
+                releaseLock();
+
                 EncoderListener mListener = mListenerRef.get();
                 if (mListener != null) {
                     mListener.onError(new MyException(this.getClass().getPackageName(),

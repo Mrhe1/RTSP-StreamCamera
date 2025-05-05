@@ -52,7 +52,6 @@ import com.example.supercamera.StreamPusher.PushStats.PushStatistics;
 import com.example.supercamera.StreamPusher.PushStats.PushStatsInfo;
 import com.example.supercamera.StreamPusher.PushStats.PushStatsListener;
 import com.example.supercamera.StreamPusher.PushStats.TimeStamp;
-import com.example.supercamera.VideoRecorder.RecorderState;
 
 import org.bytedeco.ffmpeg.avcodec.AVCodecParameters;
 import org.bytedeco.ffmpeg.avcodec.AVPacket;

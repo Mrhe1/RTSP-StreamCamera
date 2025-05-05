@@ -1,5 +1,7 @@
 package com.example.supercamera.VideoRecorder;
 
+import static com.example.supercamera.MyException.ErrorLock.getLock;
+import static com.example.supercamera.MyException.ErrorLock.releaseLock;
 import static com.example.supercamera.MyException.MyException.ILLEGAL_STATE;
 import static com.example.supercamera.VideoRecorder.ErrorCode.ERROR_Codec;
 import static com.example.supercamera.VideoRecorder.ErrorCode.ERROR_Recorder_CONFIG;
@@ -261,6 +263,8 @@ public class VideoRecorderImpl implements VideoRecorder {
                 state.getState() != STOPPING) return;
 
         state.setState(ERROR);
+        // 获取errorLock
+        if(!getLock()) return;
 
         Executors.newSingleThreadExecutor().submit(() -> {
             synchronized (errorLock) {
@@ -273,6 +277,8 @@ public class VideoRecorderImpl implements VideoRecorder {
                 }
 
                 state.setState(READY);
+                // 释放errorLock
+                releaseLock();
 
                 RecorderListener mListener = mListenerRef.get();
                 if (mListener != null) {

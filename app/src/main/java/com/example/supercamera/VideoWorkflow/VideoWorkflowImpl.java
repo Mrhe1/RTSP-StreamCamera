@@ -1,5 +1,8 @@
 package com.example.supercamera.VideoWorkflow;
 
+import static com.example.supercamera.MyException.ErrorLock.getLock;
+import static com.example.supercamera.MyException.ErrorLock.isOnError;
+import static com.example.supercamera.MyException.ErrorLock.releaseLock;
 import static com.example.supercamera.MyException.MyException.ILLEGAL_STATE;
 import static com.example.supercamera.MyException.MyException.RUNTIME_ERROR;
 import static com.example.supercamera.VideoWorkflow.ErrorCode.ERROR_Camera;
@@ -169,7 +172,7 @@ public class VideoWorkflowImpl implements VideoWorkflow {
 
         @Override
         public void onStartTimeOUT() {
-            if(state.getState() != STARTING) return;
+            if(state.getState() != STARTING || isOnError()) return;
             Timber.tag(TAG).e("工作流启动超时");
             notifyError(null, RUNTIME_ERROR, Start_TimeOUT, "工作流启动超时");
         }
@@ -189,7 +192,7 @@ public class VideoWorkflowImpl implements VideoWorkflow {
     private final Handler mMainHandler = new Handler(Looper.getMainLooper());
     private final ExecutorService reportExecutor = Executors.newSingleThreadExecutor();
     // 开始的超时时间
-    private final Long startTimeOutMilliseconds = 8500L;
+    private final Long startTimeOutMilliseconds = 6500L;
     private final Long waitForSurfaceTimeMilliseconds = 1_500L;
     private final Context context;
     // 最终配置参数
@@ -442,6 +445,8 @@ public class VideoWorkflowImpl implements VideoWorkflow {
         }
 
         state.setState(ERROR);
+        // 获取errorLock
+        if(!getLock()) return;
 
         Executors.newSingleThreadExecutor().submit(() -> {
             synchronized (errorLock) {
@@ -468,6 +473,9 @@ public class VideoWorkflowImpl implements VideoWorkflow {
                 }
 
                 state.setState(READY);
+                // 释放errorLock
+                releaseLock();
+
                 WorkflowListener mListener = mListenerRef.get();
                 if(mListener != null) {
                     if(e != null) {

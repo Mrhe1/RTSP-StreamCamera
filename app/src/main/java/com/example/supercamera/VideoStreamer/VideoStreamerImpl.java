@@ -1,5 +1,7 @@
 package com.example.supercamera.VideoStreamer;
 
+import static com.example.supercamera.MyException.ErrorLock.getLock;
+import static com.example.supercamera.MyException.ErrorLock.releaseLock;
 import static com.example.supercamera.MyException.MyException.ILLEGAL_ARGUMENT;
 import static com.example.supercamera.MyException.MyException.ILLEGAL_STATE;
 import static com.example.supercamera.StreamPusher.PushStats.TimeStamp.TimeStampStyle.Encoded;
@@ -133,8 +135,8 @@ public class VideoStreamerImpl implements VideoStreamer {
 
             state.setState(STOPPING);
             try {
-                mPusher.stop();
                 mVideoEncoder.stop();
+                mPusher.stop();
                 state.setState(READY);
             } catch (MyException e) {
                 Timber.tag(TAG).e(e,"stop失败:%s", e.getMessage());
@@ -328,6 +330,8 @@ public class VideoStreamerImpl implements VideoStreamer {
                 state.getState() != STOPPING) return;
 
         state.setState(ERROR);
+        // 获取errorLock
+        if(!getLock()) return;
 
         Executors.newSingleThreadExecutor().submit(() -> {
             synchronized (errorLock) {
@@ -347,6 +351,9 @@ public class VideoStreamerImpl implements VideoStreamer {
                 }
 
                 state.setState(READY);
+                // 释放errorLock
+                releaseLock();
+
                 StreamListener mListener = mListenerRef.get();
                 if (mListener != null) {
                     if (e != null) {
