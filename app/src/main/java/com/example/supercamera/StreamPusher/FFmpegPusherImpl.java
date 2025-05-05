@@ -1,5 +1,7 @@
 package com.example.supercamera.StreamPusher;
 
+import static com.example.supercamera.MyException.ErrorLock.getLock;
+import static com.example.supercamera.MyException.ErrorLock.releaseLock;
 import static com.example.supercamera.MyException.MyException.ILLEGAL_ARGUMENT;
 import static com.example.supercamera.MyException.MyException.ILLEGAL_STATE;
 import static com.example.supercamera.MyException.MyException.RUNTIME_ERROR;
@@ -17,6 +19,7 @@ import static com.example.supercamera.StreamPusher.PushState.PushStateEnum.READY
 import static com.example.supercamera.StreamPusher.PushState.PushStateEnum.RECONNECTING;
 import static com.example.supercamera.StreamPusher.PushState.PushStateEnum.STARTING;
 import static com.example.supercamera.StreamPusher.PushState.PushStateEnum.STOPPING;
+import static com.example.supercamera.VideoStreamer.ErrorCode.ERROR_Stream_STOP;
 import static org.bytedeco.ffmpeg.global.avcodec.AV_PKT_FLAG_KEY;
 import static org.bytedeco.ffmpeg.global.avcodec.av_new_packet;
 import static org.bytedeco.ffmpeg.global.avcodec.av_packet_alloc;
@@ -69,6 +72,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 
 import io.reactivex.rxjava3.core.Observable;
 import io.reactivex.rxjava3.disposables.CompositeDisposable;
@@ -83,7 +88,7 @@ public class FFmpegPusherImpl implements StreamPusher {
     private PushConfig mConfig;
     private AVCodecParameters params = avcodec_parameters_alloc();
     private final AtomicReference<PushListener> listenerRef = new AtomicReference<>();
-    private final Object FFmpegLock = new Object();
+    private final Lock FFmpegLock = new ReentrantLock();
     private final Object reconnectLock = new Object();
     // 外部调用锁
     private final Object publicLock = new Object();
@@ -222,7 +227,7 @@ public class FFmpegPusherImpl implements StreamPusher {
                 //销毁重连
                 disposeReconnect();
                 // 停止ffmpeg
-                stopFFmpeg();
+                forceStopFFmpeg();
 
                 if (reportExecutor != null) {
                     reportExecutor.shutdownNow();
@@ -241,7 +246,10 @@ public class FFmpegPusherImpl implements StreamPusher {
     @Override
     public void pushFrame(ByteBuffer data, MediaCodec.BufferInfo bufferInfo, Long encodedTime) {
         synchronized (publicLock) {
-            synchronized (FFmpegLock) {
+                if(!FFmpegLock.tryLock()) {
+                    Timber.tag(TAG).e("pushFrame失败，FFmpegLock锁被占用");
+                    return;
+                }
                 if (state.getState() != PUSHING
                         || (bufferInfo.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
                     return;
@@ -351,8 +359,9 @@ public class FFmpegPusherImpl implements StreamPusher {
                     if (pkt != null && !pkt.isNull()) {
                         releasePacket(pkt);
                     }
+                    FFmpegLock.unlock();
                 }
-            }
+
         }
     }
 
@@ -387,155 +396,197 @@ public class FFmpegPusherImpl implements StreamPusher {
 
     // throw RuntimeException
     private void startFFmpeg(PushConfig config) {
-        synchronized (FFmpegLock) {
-            AVFormatContext outputContext = null;
-            AVDictionary options = null;
-            try {
-
-                // 1. 初始化网络（只进行一次）
-                if (startCount == 0) {
-                    avformat_network_init();
-                }
-                startCount++;
-
-                // 2. 使用alloc_output_context2自动创建上下文
-                AVOutputFormat outputFormat = av_guess_format("rtsp", null, null);
-                if (outputFormat == null) {
-                    throw new RuntimeException("FFFmpeg未编译RTSP支持");
-                }
-
-                PointerPointer<AVFormatContext> ctxPtr = new PointerPointer<>(1);
-
-                int ret = avformat_alloc_output_context2(
-                        ctxPtr,          // 双指针容器
-                        outputFormat,
-                        new BytePointer("rtsp"),
-                        new BytePointer(config.url)
-                );
-
-                if (ret < 0 || ctxPtr.get() == null) {
-                    throw new RuntimeException("上下文分配失败: " + av_err2str(ret));
-                }
-                outputContext = new AVFormatContext(ctxPtr.get());
-
-                // 检查pb是否已初始化
-                if (outputContext.pb() == null || outputContext.pb().isNull()) {
-                    // 需要手动初始化AVIOContext
-                    outputContext.pb(avio_alloc_context(
-                            new BytePointer(av_malloc(4096)),
-                            4096,
-                            AVIO_FLAG_WRITE,
-                            null, null, null, null
-                    ));
-                }
-
-                // 3. 创建视频流
-                videoStream = avformat_new_stream(outputContext, null);
-                if (videoStream == null || videoStream.isNull()) {
-                    throw new RuntimeException("无法创建视频流");
-                }
-
-                // 参数复制
-                AVCodecParameters dstParams = videoStream.codecpar();
-                ret = avcodec_parameters_copy(dstParams, params);
-                if (ret < 0) {
-                    throw new RuntimeException("参数复制失败: " + av_err2str(ret));
-                }
-
-                // 设置关键参数
-                dstParams.codec_tag(0);
-                BytePointer extradata = new BytePointer(av_malloc(config.header.length));
-                extradata.put(config.header);
-                dstParams.extradata(extradata);
-                dstParams.extradata_size(config.header.length);
-
-                // 时间基配置
-                videoStream.time_base().num(1);
-                videoStream.time_base().den(config.fps);
-
-                // 4. 设置选项
-                options = new AVDictionary();
-                av_dict_set(options, "rtsp_transport", "tcp", 0);
-                av_dict_set(options, "max_delay", "200000", 0);
-                av_dict_set(options, "tune", "zerolatency", 0);
-                // set maximum timeout (in seconds) to wait for incoming connections (-1 is infinite, imply flag listen) (deprecated, use listen_timeout) (from INT_MIN to INT_MAX) (default -1)
-                av_dict_set(options, "timeout", "1500000", 0); // 1.5秒超时
-                // set timeout (in microseconds) of socket TCP I/O operations (from INT_MIN to INT_MAX) (default 0)
-                av_dict_set(options, "stimeout", "1500000", 0); // 1.5秒超时
-                // Timeout for IO operations (in microseconds) (from 0 to I64_MAX) (default 0)
-                //av_dict_set(options, "rw_timeout", "1500000", 0);
-                av_dict_set(options, "f", "rtsp", 0);
-
-                // 6. 写入头部
-                ret = avformat_write_header(outputContext, options);
-                if (ret < 0) {
-                    throw new RuntimeException("写头失败: " + av_err2str(ret));
-                }
-
-                this.outputContext = outputContext;
-
-                List<PublishSubject<TimeStamp>> totalQueue = config.timeStampQueue;
-                totalQueue.add(pushReportQueue);
-
-                // 7. 开始统计帧数据
-                statistics = new PushStatistics(config.statsIntervalSeconds,
-                        config.pingIntervalSeconds, config.url,
-                        config.pushFailureRateSet, totalQueue);
-
-                statistics.setPushStatListener(new PushStatsListener() {
-                    @Override
-                    public void onStatistics(PushStatsInfo info) {
-                        PushListener listener = listenerRef.get();
-                        if (listener != null  && state.getState() == PUSHING) {
-                            reportExecutor.submit(() -> listener.onStatistics(info));
-                        }
-                    }
-
-                    @Override
-                    public void onNeedReconnect() {
-                        Executors.newSingleThreadExecutor().submit(() -> {
-                            if(state.getState() == PUSHING) {
-                                reconnect(config.maxReconnectAttempts,
-                                        config.reconnectPeriodSeconds);
-                            }
-                        });
-                    }
-                });
-
-                statistics.startPushStatistics();
-            } catch (Exception e) {
-                // 错误处理
-                if (outputContext != null) {
-                    avformat_free_context(outputContext);
-                    outputContext = null;
-                }
-                videoStream = null;
-                throw new RuntimeException(e);
-            } finally {
-                if (options != null) av_dict_free(options);
+        try {
+            if(!FFmpegLock.tryLock(100,  TimeUnit.MILLISECONDS)) {
+                Timber.tag(TAG).e("startFFmpeg失败，FFmpegLock锁被占用");
+                throw throwException(ILLEGAL_STATE, ERROR_Stream_STOP,"锁被占用");
             }
+        } catch (InterruptedException e) {
+            Timber.tag(TAG).e("startFFmpeg失败，FFmpegLock锁被占用");
+            throw throwException(ILLEGAL_STATE, ERROR_Stream_STOP,"锁被占用");
+        }
+
+        AVFormatContext outputContext = null;
+        AVDictionary options = null;
+        try {
+
+            // 1. 初始化网络（只进行一次）
+            if (startCount == 0) {
+                avformat_network_init();
+            }
+            startCount++;
+
+            // 2. 使用alloc_output_context2自动创建上下文
+            AVOutputFormat outputFormat = av_guess_format("rtsp", null, null);
+            if (outputFormat == null) {
+                throw new RuntimeException("FFFmpeg未编译RTSP支持");
+            }
+
+            PointerPointer<AVFormatContext> ctxPtr = new PointerPointer<>(1);
+
+            int ret = avformat_alloc_output_context2(
+                    ctxPtr,          // 双指针容器
+                    outputFormat,
+                    new BytePointer("rtsp"),
+                    new BytePointer(config.url)
+            );
+
+            if (ret < 0 || ctxPtr.get() == null) {
+                throw new RuntimeException("上下文分配失败: " + av_err2str(ret));
+            }
+            outputContext = new AVFormatContext(ctxPtr.get());
+
+            // 检查pb是否已初始化
+            if (outputContext.pb() == null || outputContext.pb().isNull()) {
+                // 需要手动初始化AVIOContext
+                outputContext.pb(avio_alloc_context(
+                        new BytePointer(av_malloc(4096)),
+                        4096,
+                        AVIO_FLAG_WRITE,
+                        null, null, null, null
+                ));
+            }
+
+            // 3. 创建视频流
+            videoStream = avformat_new_stream(outputContext, null);
+            if (videoStream == null || videoStream.isNull()) {
+                throw new RuntimeException("无法创建视频流");
+            }
+
+            // 参数复制
+            AVCodecParameters dstParams = videoStream.codecpar();
+            ret = avcodec_parameters_copy(dstParams, params);
+            if (ret < 0) {
+                throw new RuntimeException("参数复制失败: " + av_err2str(ret));
+            }
+
+            // 设置关键参数
+            dstParams.codec_tag(0);
+            BytePointer extradata = new BytePointer(av_malloc(config.header.length));
+            extradata.put(config.header);
+            dstParams.extradata(extradata);
+            dstParams.extradata_size(config.header.length);
+
+            // 时间基配置
+            videoStream.time_base().num(1);
+            videoStream.time_base().den(config.fps);
+
+            // 4. 设置选项
+            options = new AVDictionary();
+            av_dict_set(options, "rtsp_transport", "tcp", 0);
+            av_dict_set(options, "max_delay", "200000", 0);
+            av_dict_set(options, "tune", "zerolatency", 0);
+            // set maximum timeout (in seconds) to wait for incoming connections (-1 is infinite, imply flag listen) (deprecated, use listen_timeout) (from INT_MIN to INT_MAX) (default -1)
+            av_dict_set(options, "timeout", "2", 0); // 2秒超时
+            // set timeout (in microseconds) of socket TCP I/O operations (from INT_MIN to INT_MAX) (default 0)
+            av_dict_set(options, "stimeout", "1500000", 0); // 1.5秒超时
+            // Timeout for IO operations (in microseconds) (from 0 to I64_MAX) (default 0)
+            av_dict_set(options, "rw_timeout", "1500000", 0);
+            av_dict_set(options, "f", "rtsp", 0);
+
+            // 6. 写入头部
+            ret = avformat_write_header(outputContext, options);
+            if (ret < 0) {
+                throw new RuntimeException("写头失败: " + av_err2str(ret));
+            }
+
+            this.outputContext = outputContext;
+
+            List<PublishSubject<TimeStamp>> totalQueue = config.timeStampQueue;
+            totalQueue.add(pushReportQueue);
+
+            // 7. 开始统计帧数据
+            statistics = new PushStatistics(config.statsIntervalSeconds,
+                    config.pingIntervalSeconds, config.url,
+                    config.pushFailureRateSet, totalQueue);
+
+            statistics.setPushStatListener(new PushStatsListener() {
+                @Override
+                public void onStatistics(PushStatsInfo info) {
+                    PushListener listener = listenerRef.get();
+                    if (listener != null  && state.getState() == PUSHING) {
+                        reportExecutor.submit(() -> listener.onStatistics(info));
+                    }
+                }
+
+                @Override
+                public void onNeedReconnect() {
+                    Executors.newSingleThreadExecutor().submit(() -> {
+                        if(state.getState() == PUSHING) {
+                            reconnect(config.maxReconnectAttempts,
+                                    config.reconnectPeriodSeconds);
+                        }
+                    });
+                }
+            });
+
+            statistics.startPushStatistics();
+        } catch (Exception e) {
+            // 错误处理
+            if (outputContext != null) {
+                avformat_free_context(outputContext);
+                outputContext = null;
+            }
+            videoStream = null;
+            throw new RuntimeException(e);
+        } finally {
+            if (options != null) av_dict_free(options);
+            // 释放锁
+            FFmpegLock.unlock();
         }
     }
 
     private void stopFFmpeg() {
-        synchronized (FFmpegLock) {
-            try {
-                if (outputContext != null && !outputContext.isNull()) {
-                    // 显式释放videoStream相关资源
-                    if (videoStream != null && !videoStream.isNull()) {
-                        videoStream.close();
-                    }
+        try {
+            if(!FFmpegLock.tryLock(100,  TimeUnit.MILLISECONDS)) {
+                Timber.tag(TAG).e("stopFFmpeg失败，FFmpegLock锁被占用");
+                throw throwException(ILLEGAL_STATE, ERROR_Stream_STOP,"锁被占用");
+            }
+        } catch (InterruptedException e) {
+            Timber.tag(TAG).e("stopFFmpeg失败，FFmpegLock锁被占用");
+            throw throwException(ILLEGAL_STATE, ERROR_Stream_STOP,"锁被占用");
+        }
 
-                    // 必须检查是否已写入头
-                    if (!((outputContext.oformat().flags() & AVFMT_NOFILE) == 0)
-                    ) {
-                        av_write_trailer(outputContext); // 仅在成功初始化后调用
-                        avio_closep(outputContext.pb());
-                    }
+        try {
+            // 显式释放videoStream相关资源
+            if (videoStream != null && !videoStream.isNull()) {
+                videoStream.close();
+            }
+
+            if (outputContext != null && !outputContext.isNull()) {
+                // 必须检查是否已写入头
+                if (!((outputContext.oformat().flags() & AVFMT_NOFILE) == 0)
+                ) {
+                    av_write_trailer(outputContext); // 仅在成功初始化后调用
+                    avio_closep(outputContext.pb());
+                }
+                avformat_free_context(outputContext);
+            }
+        } catch (Exception e) {
+            Timber.tag(TAG).e(e, "释放FFmpeg资源异常");
+        } finally {
+            outputContext = null;
+            videoStream = null;
+        }
+    }
+
+    private void forceStopFFmpeg() {
+        try{
+            stopFFmpeg();
+        } catch(MyException e){
+            Timber.tag(TAG).w("强制停止ffmpeg");
+            try {
+                // 显式释放videoStream相关资源
+                if (videoStream != null && !videoStream.isNull()) {
+                    videoStream.close();
+                }
+
+                if (outputContext != null && !outputContext.isNull()) {
+                    avio_closep(outputContext.pb());
                     avformat_free_context(outputContext);
                 }
-            } catch (Exception e) {
-                Timber.tag(TAG).e(e, "释放FFmpeg资源异常");
+            } catch (Exception ex) {
+                Timber.tag(TAG).e(ex, "释放FFmpeg资源异常");
             } finally {
                 outputContext = null;
                 videoStream = null;
@@ -685,6 +736,9 @@ public class FFmpegPusherImpl implements StreamPusher {
         state.setState(ERROR);
 
         Executors.newSingleThreadExecutor().submit(() -> {
+            // 获取锁
+            if(!getLock()) return;
+
             synchronized (onErrorLock) {
                 switch (code) {
                     case ERROR_FFmpeg_START, ERROR_FFmpeg -> errorStop_TypeA();
@@ -696,6 +750,8 @@ public class FFmpegPusherImpl implements StreamPusher {
                 MyException e = new MyException(this.getClass().getPackageName(),
                         type, code, message);
 
+                // 释放锁
+                releaseLock();
 
                 PushListener listener = listenerRef.get();
                 if (listener != null) {

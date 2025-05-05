@@ -213,11 +213,12 @@ public class MediaCodecImpl implements VideoEncoder {
     private void notifyError(int type,int code, String message) {
         if (onError.get()) return;
         onError.set(true);
-        // 获取errorLock
-        if(!getLock()) return;
 
         Executors.newSingleThreadExecutor().submit(() -> {
             synchronized (onErrorLock) {
+                // 获取errorLock
+                if(!getLock()) return;
+
                 switch (code) {
                     case ERROR_CODEC -> errorStop_TypeA();
                     case ERROR_CODEC_START, ERROR_CODEC_CONFIG -> errorStop_TypeB();

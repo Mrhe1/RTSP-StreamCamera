@@ -84,7 +84,7 @@ public class CameraImpl implements CameraController {
     @Override
     public void configure(CameraConfig config) {
         synchronized (publicLock) {
-            if (state.getState() != READY && state.getState() == CONFIGURE) {
+            if (state.getState() != READY && state.getState() != CONFIGURE) {
                 String msg = String.format("configure failed, current state: %s",
                         state.getState().toString());
                 Timber.tag(TAG).e(msg);

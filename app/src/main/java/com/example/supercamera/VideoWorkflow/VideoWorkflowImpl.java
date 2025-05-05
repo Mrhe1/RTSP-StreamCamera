@@ -192,8 +192,8 @@ public class VideoWorkflowImpl implements VideoWorkflow {
     private final Handler mMainHandler = new Handler(Looper.getMainLooper());
     private final ExecutorService reportExecutor = Executors.newSingleThreadExecutor();
     // 开始的超时时间
-    private final Long startTimeOutMilliseconds = 6500L;
-    private final Long waitForSurfaceTimeMilliseconds = 1_500L;
+    private final Long startTimeOutMilliseconds = 8500L;
+    private final Long waitForSurfaceTimeMilliseconds = 2_000L;
     private final Context context;
     // 最终配置参数
     private Size mPreviewSize;
@@ -445,11 +445,11 @@ public class VideoWorkflowImpl implements VideoWorkflow {
         }
 
         state.setState(ERROR);
-        // 获取errorLock
-        if(!getLock()) return;
 
         Executors.newSingleThreadExecutor().submit(() -> {
             synchronized (errorLock) {
+                // 获取errorLock
+                if(!getLock()) return;
                 // 隐藏textureView
                 textureView.post(() -> textureView.setVisibility(View.INVISIBLE));
                 switch (code) {

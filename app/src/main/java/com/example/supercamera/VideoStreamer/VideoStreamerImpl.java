@@ -152,8 +152,8 @@ public class VideoStreamerImpl implements VideoStreamer {
     @Override
     public void destroy() {
         synchronized (publicLock) {
-            mPusher.destroy();
             mVideoEncoder.destroy();
+            mPusher.destroy();
             cleanResource();
             state.setState(DESTROYED);
         }
@@ -330,11 +330,12 @@ public class VideoStreamerImpl implements VideoStreamer {
                 state.getState() != STOPPING) return;
 
         state.setState(ERROR);
-        // 获取errorLock
-        if(!getLock()) return;
 
         Executors.newSingleThreadExecutor().submit(() -> {
             synchronized (errorLock) {
+                // 获取errorLock
+                if(!getLock()) return;
+
                 switch (code) {
                     case ERROR_Pusher_START, ERROR_Pusher, ERROR_Pusher_ReconnectFail -> {
                         try {

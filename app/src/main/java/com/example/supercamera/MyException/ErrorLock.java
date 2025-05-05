@@ -26,7 +26,10 @@ public class ErrorLock {
         Object lock = lockObj.get();
         if(lock == null) return;
         synchronized (lock) {
-            errorLock.unlock();
+            try {
+                errorLock.unlock();
+            } catch (Exception ignored) {
+            }
         }
     }
 

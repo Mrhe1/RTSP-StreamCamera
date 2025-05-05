@@ -72,8 +72,8 @@ public class MainActivity extends AppCompatActivity {
 
         @Override
         public void onStatistics(PushStatsInfo stats) {
-            String msg = String.format("推流统计:码率：%dkbps；丢包率：%f%%；RTT：%dms；总延迟：%dms",
-                    stats.currentBitrate, stats.pushFailureRate,
+            String msg = String.format("推流统计:码率：%dkbps；丢包率：%.2f%%；RTT：%dms；总延迟：%dms",
+                    stats.currentBitrate, stats.pushFailureRate * 100,
                     stats.rtt, stats.totalLatency);
             Timber.tag(TAG).i(msg);
         }
@@ -116,11 +116,11 @@ public class MainActivity extends AppCompatActivity {
         Size pushSize = new Size(1280,720);
         Size recordSize = new Size(2560,1440);
         int fps = 30;
-        int pushBitrate = 2200;//单位kbps
+        int pushBitrate = 800;//单位kbps
         int stabilizationMode = Stab_OFF;//防抖
         int record_bitrate = 5000;//单位kbps
         int record_fps =30;
-        String push_Url = "rtsp://47.109.148.245:1521/live/stream";// rtsp://47.109.148.245:1521/live/stream
+        String push_Url = "rtsp://47.109.146.122:1521/live/stream";// rtsp://47.109.148.245:1521/live/stream
 
         if(!isPermitted.get()) {
             requestCameraPermission();

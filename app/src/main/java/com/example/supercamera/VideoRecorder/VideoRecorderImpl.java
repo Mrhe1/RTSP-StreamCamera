@@ -263,10 +263,11 @@ public class VideoRecorderImpl implements VideoRecorder {
                 state.getState() != STOPPING) return;
 
         state.setState(ERROR);
-        // 获取errorLock
-        if(!getLock()) return;
 
         Executors.newSingleThreadExecutor().submit(() -> {
+            // 获取errorLock
+            if(!getLock()) return;
+
             synchronized (errorLock) {
                 switch (code) {
                     case ERROR_Codec -> releaseMuxer();

@@ -310,8 +310,8 @@ public class PushStatistics {
                         }
                     }
 
-                    // 用rtt和帧大小估算I/O延迟,按上行带宽15mbps算,加5ms的tcp额外开销
-                    //avgLatency3 = avgRTT + currentBitrate / 1024 / fps / 15 + 5;
+                    // 用rtt和帧大小估算I/O延迟,按上行带宽15mbps算,加5ms的tcp额外开销,按30帧算
+                    avgLatency3 = avgRTT + currentBitrate / 1024 / 30 / 15 + 5;
                     totalLatency = ((int) ((avgLatency1 + avgLatency2) / 1_000_000L)) + avgLatency3;
 
                     Timber.tag(TAG).d("平均延迟计算完成: L1=%dms, L2=%dms ,L3=%dms",
