@@ -17,6 +17,7 @@ public class MyEncoderConfig {
     private final int profile;
     public final MediaFormat format;
     private final int lowLatency;
+    private final int bitrateMode;
 
     private MyEncoderConfig(Builder builder) {
         this.width = builder.width;
@@ -29,6 +30,7 @@ public class MyEncoderConfig {
         this.mimeType = builder.mimeType;
         this.profile = builder.profile;
         this.lowLatency = builder.lowLatency;
+        this.bitrateMode = builder.bitrateMode;
 
         this.format = createMediaFormat();
     }
@@ -40,6 +42,7 @@ public class MyEncoderConfig {
         format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, iFrameInterval);
         format.setInteger(MediaFormat.KEY_PROFILE, profile);
         format.setInteger(MediaFormat.KEY_LOW_LATENCY, lowLatency);
+        format.setInteger(MediaFormat.KEY_BITRATE_MODE, bitrateMode);
 
         if (colorFormat != 0) {
             format.setInteger(MediaFormat.KEY_COLOR_FORMAT, colorFormat);
@@ -68,6 +71,7 @@ public class MyEncoderConfig {
         private String mimeType = MediaFormat.MIMETYPE_VIDEO_AVC;
         private int profile = MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline;
         private int lowLatency = 0;  // 1启用
+        private int bitrateMode = MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR;
 
         public Builder (int width, int height) {
             this.width = width;
@@ -116,6 +120,11 @@ public class MyEncoderConfig {
 
         public Builder enableLowLatency() {
             this.lowLatency = 1;
+            return this;
+        }
+
+        public Builder setBitrateMode(int bitrateMode) {
+            this.bitrateMode = bitrateMode;
             return this;
         }
 

@@ -65,6 +65,7 @@ public class VideoRecorderImpl implements VideoRecorder {
                         .setProfile(config.profile)
                         .setMimeType(config.mimeType)
                         .setColorFormat(MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+                        .setBitrateMode(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
                         .build();
 
                 // 初始化编码器

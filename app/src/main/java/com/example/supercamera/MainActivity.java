@@ -116,7 +116,7 @@ public class MainActivity extends AppCompatActivity {
         Size pushSize = new Size(1280,720);
         Size recordSize = new Size(2560,1440);
         int fps = 30;
-        int pushBitrate = 800;//单位kbps
+        int pushBitrate = 1500;//单位kbps
         int stabilizationMode = Stab_OFF;//防抖
         int record_bitrate = 5000;//单位kbps
         int record_fps =30;

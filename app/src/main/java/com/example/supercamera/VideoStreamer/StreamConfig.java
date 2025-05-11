@@ -53,6 +53,7 @@ public class StreamConfig {
                 .setProfile(MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
                 .setMimeType(this.encoderFormat)
                 .enableLowLatency()
+                .setBitrateMode(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
                 .build();
     }
 

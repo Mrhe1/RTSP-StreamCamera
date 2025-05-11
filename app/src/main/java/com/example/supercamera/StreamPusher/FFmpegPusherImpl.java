@@ -246,122 +246,125 @@ public class FFmpegPusherImpl implements StreamPusher {
     @Override
     public void pushFrame(ByteBuffer data, MediaCodec.BufferInfo bufferInfo, Long encodedTime) {
         synchronized (publicLock) {
-                if(!FFmpegLock.tryLock()) {
-                    Timber.tag(TAG).e("pushFrame失败，FFmpegLock锁被占用");
-                    return;
-                }
-                if (state.getState() != PUSHING
-                        || (bufferInfo.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
+            if (state.getState() != PUSHING
+                    || (bufferInfo.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
+                return;
+            }
+            if(!FFmpegLock.tryLock()) {
+                Timber.tag(TAG).e("pushFrame失败，FFmpegLock锁被占用");
+                return;
+            }
+
+            // 关键指针状态检查
+            if (outputContext == null || outputContext.isNull() ||
+                    videoStream == null || videoStream.isNull()) {
+                Timber.tag(TAG).d("推流上下文未初始化，丢弃帧数据");
+                FFmpegLock.unlock();
+                return;
+            }
+
+            boolean isSuccess = true;
+            AVPacket pkt = acquirePacket();
+            try {
+                // 验证bufferInfo参数有效性
+                if (bufferInfo.offset < 0 || bufferInfo.size <= 0
+                        || (bufferInfo.offset + bufferInfo.size) > data.capacity()) {
+                    Timber.tag(TAG).e("无效的BufferInfo参数: offset=%d, size=%d, capacity=%d",
+                            bufferInfo.offset, bufferInfo.size, data.capacity());
                     return;
                 }
 
-                // 关键指针状态检查
-                if (outputContext == null || outputContext.isNull() ||
-                        videoStream == null || videoStream.isNull()) {
-                    Timber.tag(TAG).d("推流上下文未初始化，丢弃帧数据");
+                int ret = av_new_packet(pkt, bufferInfo.size);
+                if (ret < 0) {
+                    Timber.tag(TAG).e("帧写入分配内存失败: %s", av_err2str(ret));
                     return;
                 }
 
-                boolean isSuccess = true;
-                AVPacket pkt = acquirePacket();
+                if (pkt == null || data == null || bufferInfo == null) {
+                    Timber.tag(TAG).w("Invalid null object detected");
+                    return;
+                }
+
                 try {
-                    // 验证bufferInfo参数有效性
-                    if (bufferInfo.offset < 0 || bufferInfo.size <= 0
-                            || (bufferInfo.offset + bufferInfo.size) > data.capacity()) {
-                        Timber.tag(TAG).e("无效的BufferInfo参数: offset=%d, size=%d, capacity=%d",
-                                bufferInfo.offset, bufferInfo.size, data.capacity());
+                    BytePointer dstPtr = pkt.data();
+                    if (dstPtr == null) {
+                        Timber.tag(TAG).w("Packet data is null");
                         return;
                     }
 
-                    int ret = av_new_packet(pkt, bufferInfo.size);
-                    if (ret < 0) {
-                        Timber.tag(TAG).e("帧写入分配内存失败: %s", av_err2str(ret));
+                    // 创建临时局部变量避免竞态条件
+                    final int targetOffset = bufferInfo.offset;
+                    final int targetSize = bufferInfo.size;
+                    final int bufferCapacity = data.capacity();
+
+                    // 验证偏移量和大小有效性
+                    if (targetOffset < 0 || targetSize <= 0 || (targetOffset + targetSize) > bufferCapacity) {
+                        Timber.tag(TAG).e("Invalid buffer range: offset=%d size=%d capacity=%d",
+                                targetOffset, targetSize, bufferCapacity);
                         return;
                     }
 
-                    if (pkt == null || data == null || bufferInfo == null) {
-                        Timber.tag(TAG).w("Invalid null object detected");
+                    BytePointer srcPtr = new BytePointer(data);
+                    if (srcPtr == null) {
+                        Timber.tag(TAG).w("Failed to create source pointer");
                         return;
                     }
 
-                    try {
-                        BytePointer dstPtr = pkt.data();
-                        if (dstPtr == null) {
-                            Timber.tag(TAG).w("Packet data is null");
-                            return;
-                        }
+                    synchronized (data) {
+                        int oldPosition = data.position();
+                        int oldLimit = data.limit();
+                        try {
+                            data.position(targetOffset);
+                            data.limit(targetOffset + targetSize);
+                            srcPtr.position(targetOffset).limit(targetOffset + targetSize);
 
-                        // 创建临时局部变量避免竞态条件
-                        final int targetOffset = bufferInfo.offset;
-                        final int targetSize = bufferInfo.size;
-                        final int bufferCapacity = data.capacity();
-
-                        // 验证偏移量和大小有效性
-                        if (targetOffset < 0 || targetSize <= 0 || (targetOffset + targetSize) > bufferCapacity) {
-                            Timber.tag(TAG).e("Invalid buffer range: offset=%d size=%d capacity=%d",
-                                    targetOffset, targetSize, bufferCapacity);
-                            return;
-                        }
-
-                        BytePointer srcPtr = new BytePointer(data);
-                        if (srcPtr == null) {
-                            Timber.tag(TAG).w("Failed to create source pointer");
-                            return;
-                        }
-
-                        synchronized (data) {
-                            int oldPosition = data.position();
-                            int oldLimit = data.limit();
-                            try {
-                                data.position(targetOffset);
-                                data.limit(targetOffset + targetSize);
-                                srcPtr.position(targetOffset).limit(targetOffset + targetSize);
-
-                                if (dstPtr == null || srcPtr == null ||
-                                        dstPtr.address() == 0 || srcPtr.address() == 0) {
-                                    Timber.tag(TAG).w("Invalid pointer detected");
-                                    return;
-                                }
-
-                                dstPtr.put(srcPtr);
-                                dstPtr.get();
-                            } finally {
-                                data.position(oldPosition);
-                                data.limit(oldLimit);
+                            if (dstPtr == null || srcPtr == null ||
+                                    dstPtr.address() == 0 || srcPtr.address() == 0) {
+                                Timber.tag(TAG).w("Invalid pointer detected");
+                                return;
                             }
+
+                            dstPtr.put(srcPtr);
+                            dstPtr.get();
+                        } finally {
+                            data.position(oldPosition);
+                            data.limit(oldLimit);
                         }
-                    } catch (Exception e) {
-                        Timber.tag(TAG).e(e, "Unexpected error during buffer copy");
                     }
-
-                    // 时间基计算(使用微秒时间基)
-                    AVRational srcTimeBase = new AVRational().num(1).den(1000000);
-                    pkt.pts(av_rescale_q(bufferInfo.presentationTimeUs,
-                            srcTimeBase,
-                            videoStream.time_base()));
-                    pkt.dts(AV_NOPTS_VALUE); // 让FFmpeg自动计算
-                    pkt.stream_index(videoStream.index());
-                    int flags = (bufferInfo.flags & MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0 ? AV_PKT_FLAG_KEY : 0;
-                    pkt.flags(flags);
-                    ret = av_interleaved_write_frame(outputContext, pkt);
-
-                    // 记录发送时间戳（纳秒）
-                    pushReportQueue.onNext(new TimeStamp(TimeStamp.TimeStampStyle.Pushed,
-                            System.nanoTime() - encodedTime));
-
-                    if (ret < 0) {
-                        isSuccess = false;
-                        Timber.tag(TAG).e("帧写入失败: %d", ret);
-                    }
-                } catch (Exception ignored) {
-                } finally {
-                    statistics.setPushStatistics(isSuccess, bufferInfo.size);
-                    if (pkt != null && !pkt.isNull()) {
-                        releasePacket(pkt);
-                    }
-                    FFmpegLock.unlock();
+                } catch (Exception e) {
+                    Timber.tag(TAG).e(e, "Unexpected error during buffer copy");
                 }
 
+                // 时间基计算(使用微秒时间基)
+                AVRational srcTimeBase = new AVRational().num(1).den(1000000);
+                pkt.pts(av_rescale_q(bufferInfo.presentationTimeUs,
+                        srcTimeBase,
+                        videoStream.time_base()));
+                pkt.dts(AV_NOPTS_VALUE); // 让FFmpeg自动计算
+                //pkt.dts(av_rescale_q(bufferInfo.presentationTimeUs,
+                        //srcTimeBase,
+                        //videoStream.time_base()));
+                pkt.stream_index(videoStream.index());
+                int flags = (bufferInfo.flags & MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0 ? AV_PKT_FLAG_KEY : 0;
+                pkt.flags(flags);
+                ret = av_interleaved_write_frame(outputContext, pkt);
+
+                // 记录发送时间戳（纳秒）
+                pushReportQueue.onNext(new TimeStamp(TimeStamp.TimeStampStyle.Pushed,
+                        System.nanoTime() - encodedTime));
+
+                if (ret < 0) {
+                    isSuccess = false;
+                    Timber.tag(TAG).e("帧写入失败: %d", ret);
+                }
+            } catch (Exception ignored) {
+            } finally {
+                statistics.setPushStatistics(isSuccess, bufferInfo.size);
+                if (pkt != null && !pkt.isNull()) {
+                    releasePacket(pkt);
+                }
+                FFmpegLock.unlock();
+            }
         }
     }
 
@@ -567,6 +570,7 @@ public class FFmpegPusherImpl implements StreamPusher {
         } finally {
             outputContext = null;
             videoStream = null;
+            FFmpegLock.unlock();
         }
     }
 
@@ -596,7 +600,12 @@ public class FFmpegPusherImpl implements StreamPusher {
 
     private void restartPusher() {
         // 先停止
-        stopFFmpeg();
+        try {
+            stopFFmpeg();
+        } catch (Exception ignored) {
+            Timber.tag(TAG).w("停止ffmpeg失败");
+        }
+
         try {
             Thread.sleep(100);
         } catch (InterruptedException ignored) {
