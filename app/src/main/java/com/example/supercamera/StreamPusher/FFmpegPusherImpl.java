@@ -200,15 +200,10 @@ public class FFmpegPusherImpl implements StreamPusher {
             state.setState(STOPPING);
 
             try {
-                if (statistics != null) {
-                    // 停止统计
-                    statistics.stopPushStatistics();
-                }
-                //销毁重连
-                disposeReconnect();
                 // 停止ffmpeg
                 stopFFmpeg();
-
+                //销毁重连
+                disposeReconnect();
                 state.setState(READY);
             } catch (Exception e) {
                 Timber.tag(TAG).e(e, "停止FFmpeg出错");
@@ -220,12 +215,6 @@ public class FFmpegPusherImpl implements StreamPusher {
     public void destroy() {
         synchronized (publicLock) {
             try {
-                if (statistics != null) {
-                    // 停止统计
-                    statistics.stopPushStatistics();
-                }
-                //销毁重连
-                disposeReconnect();
                 // 停止ffmpeg
                 forceStopFFmpeg();
 
@@ -570,6 +559,11 @@ public class FFmpegPusherImpl implements StreamPusher {
         } finally {
             outputContext = null;
             videoStream = null;
+            if (statistics != null) {
+                // 停止统计
+                statistics.stopPushStatistics();
+            }
+            statistics = null;
             FFmpegLock.unlock();
         }
     }
@@ -594,6 +588,13 @@ public class FFmpegPusherImpl implements StreamPusher {
             } finally {
                 outputContext = null;
                 videoStream = null;
+                if (statistics != null) {
+                    // 停止统计
+                    statistics.stopPushStatistics();
+                }
+                statistics = null;
+                //销毁重连
+                disposeReconnect();
             }
         }
     }
@@ -674,23 +675,25 @@ public class FFmpegPusherImpl implements StreamPusher {
                                             listener.onReconnect(true, (int) (tick + 1));
                                         });
                                     }
-                                } catch (RuntimeException e) {
+                                } catch (Exception e) {
                                     // 单次重连失败
                                     Timber.tag(TAG).e(e, "单次重连操作失败");
                                     PushListener listener = listenerRef.get();
+                                    boolean i = reportExecutor.isShutdown();
                                     reportExecutor.submit(() -> {
                                         listener.onReconnect(false, (int)(tick + 1));
                                     });
+                                    PushState.PushStateEnum state1 = state.getState();
                                 }
-                            },
-                            throwable -> {
-                                Timber.tag(TAG).e(throwable, "重连流发生致命错误");
-                                disposeReconnect();
-                                stop();
-
-                                notifyError(RUNTIME_ERROR,
-                                        ERROR_FFmpeg_Reconnect,"重连流发生致命错误");
                             }
+                            //throwable -> {
+                                //Timber.tag(TAG).e(throwable, "重连流发生致命错误");
+                                //disposeReconnect();
+                                //stop();
+
+                                //notifyError(RUNTIME_ERROR,
+                                        //ERROR_FFmpeg_Reconnect,"重连流发生致命错误");
+                            //}
                     );
             compositeDisposable.add(reconnectDisposable);
         }
@@ -777,36 +780,16 @@ public class FFmpegPusherImpl implements StreamPusher {
 
     private void errorStop_TypeA() {
         try {
-            if (statistics != null) {
-                // 停止统计
-                statistics.stopPushStatistics();
-            }
-            //销毁重连
-            disposeReconnect();
             // 停止ffmpeg
             stopFFmpeg();
-
-            if (reportExecutor != null) {
-                reportExecutor.shutdown();
-            }
-
             state.setState(READY);
         } catch (Exception ignored) {}
     }
 
     private void errorStop_TypeB() {
         try {
-            if (statistics != null) {
-                // 停止统计
-                statistics.stopPushStatistics();
-            }
             // 停止ffmpeg
             stopFFmpeg();
-
-            if (reportExecutor != null) {
-                reportExecutor.shutdown();
-            }
-
             state.setState(READY);
         } catch (Exception ignored) {}
     }

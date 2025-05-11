@@ -348,6 +348,7 @@ public class PushStatistics {
             // 回调
             int finalCurrentRTT = currentRTT;
             int finalTotalLatency = totalLatency;
+            if(reportExecutor.isShutdown()) return;
             reportExecutor.submit(() -> {
                 PushStatsListener listener = listenerRef.get();
                 if(listener != null) {
