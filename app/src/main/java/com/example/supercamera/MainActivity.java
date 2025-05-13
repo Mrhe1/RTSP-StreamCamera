@@ -21,6 +21,7 @@ import android.view.View;
 import java.io.File;
 import java.text.SimpleDateFormat;
 import java.util.Locale;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -108,6 +109,12 @@ public class MainActivity extends AppCompatActivity {
 
         workflow = new VideoWorkflowImpl(this, textureView);
         workflow.setStreamListener(listener);
+
+        Executors.newSingleThreadExecutor().submit(() -> {
+            Timber.tag(TAG).i("初始化完成");
+           Stair  stair = new Stair();
+           Timber.tag(TAG).i("初始化");
+        });
     }
 
     private void handleStart()
